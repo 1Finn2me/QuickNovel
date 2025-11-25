@@ -18,6 +18,7 @@ class WebNovelProvider : MainAPI() {
     override val mainUrl = "https://www.webnovel.com"
     override val hasMainPage = true
 
+    override val iconId = R.drawable.icon_webnovel
 
     // Tags based on LNReader - Male & Female genres
     override val tags = listOf(
