@@ -1,15 +1,12 @@
 package com.lagradost.quicknovel.ui.download
 
 import android.annotation.SuppressLint
-import android.content.Intent
 import android.content.res.Configuration
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.SearchView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
@@ -21,9 +18,9 @@ import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
 import com.lagradost.quicknovel.BaseApplication.Companion.getKey
 import com.lagradost.quicknovel.BaseApplication.Companion.setKey
-import com.lagradost.quicknovel.BookDownloader2
 import com.lagradost.quicknovel.BookDownloader2Helper
 import com.lagradost.quicknovel.BookDownloader2Helper.IMPORT_SOURCE
+import com.lagradost.quicknovel.BookDownloader2Helper.IMPORT_SOURCE_PDF
 import com.lagradost.quicknovel.CommonActivity.activity
 import com.lagradost.quicknovel.DOWNLOAD_NORMAL_SORTING_METHOD
 import com.lagradost.quicknovel.DOWNLOAD_SETTINGS
@@ -32,18 +29,12 @@ import com.lagradost.quicknovel.DownloadState
 import com.lagradost.quicknovel.R
 import com.lagradost.quicknovel.databinding.FragmentDownloadsBinding
 import com.lagradost.quicknovel.databinding.SortBottomSheetBinding
-import com.lagradost.quicknovel.mvvm.logError
 import com.lagradost.quicknovel.mvvm.observe
-import com.lagradost.quicknovel.mvvm.safe
 import com.lagradost.quicknovel.ui.SortingMethodAdapter
 import com.lagradost.quicknovel.ui.UiImage
 import com.lagradost.quicknovel.ui.img
 import com.lagradost.quicknovel.util.UIHelper.colorFromAttribute
 import com.lagradost.quicknovel.util.UIHelper.fixPaddingStatusbar
-import com.lagradost.safefile.MimeTypes
-import com.lagradost.safefile.SafeFile
-import kotlinx.coroutines.launch
-import java.io.File
 
 class DownloadFragment : Fragment() {
     private lateinit var viewModel: DownloadViewModel
@@ -114,7 +105,7 @@ class DownloadFragment : Fragment() {
             return id
         }
 
-        val isImported: Boolean get() = apiName == IMPORT_SOURCE
+        val isImported: Boolean get() = (apiName == IMPORT_SOURCE || apiName ==IMPORT_SOURCE_PDF)
     }
 
     override fun onCreateView(
@@ -131,18 +122,6 @@ class DownloadFragment : Fragment() {
     @SuppressLint("NotifyDataSetChanged")
     private fun setupGridView() {
         (binding.viewpager.adapter as? ViewpagerAdapter)?.notifyDataSetChanged()
-        /*val compactView = requireContext().getDownloadIsCompact()
-        val spanCountLandscape = if (compactView) 2 else 6
-        val spanCountPortrait = if (compactView) 1 else 3
-        val orientation = resources.configuration.orientation
-
-        if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-            binding.downloadCardSpace.spanCount = spanCountLandscape
-            binding.bookmarkCardSpace.spanCount = spanCountLandscape
-        } else {
-            binding.downloadCardSpace.spanCount = spanCountPortrait
-            binding.bookmarkCardSpace.spanCount = spanCountPortrait
-        }*/
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -320,5 +299,6 @@ class DownloadFragment : Fragment() {
                 bookmarkAdapter.submitList(cards.map { it.copy() })
             }
         }*/
+
     }
 }

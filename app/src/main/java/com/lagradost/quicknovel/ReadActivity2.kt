@@ -23,8 +23,6 @@ import android.widget.ArrayAdapter
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ListView
-import android.widget.SeekBar
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -74,7 +72,6 @@ import com.lagradost.quicknovel.util.UIHelper.popupMenu
 import com.lagradost.quicknovel.util.UIHelper.systemFonts
 import com.lagradost.quicknovel.util.divCeil
 import com.lagradost.quicknovel.util.toPx
-import java.io.File
 import java.lang.Integer.max
 import java.lang.ref.WeakReference
 import java.util.Locale
@@ -687,6 +684,9 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
             .toFloat() * this.stepSize
     }
 
+
+
+
     @SuppressLint("ClickableViewAccessibility", "SetTextI18n")
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -711,7 +711,8 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
                 textFont = viewModel.textFont,
                 backgroundColor = viewModel.backgroundColor,
                 bionicReading = viewModel.bionicReading,
-                isTextSelectable = viewModel.isTextSelectable
+                isTextSelectable = viewModel.isTextSelectable,
+                verticalPadding = viewModel.textVerticalPadding,
             ).also { config ->
                 updateOtherTextConfig(config)
             }
@@ -749,6 +750,13 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
                 updateTextAdapterConfig()
             }
         }
+
+        observe(viewModel.textVerticalPaddingLive) { padding ->
+            if (textAdapter.changeTextVerticalPadding(padding)) {
+                updateTextAdapterConfig()
+            }
+        }
+
 
         observe(viewModel.bionicReadingLive) { color ->
             if (textAdapter.changeBionicReading(color)) {
@@ -858,7 +866,7 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
                 // cant be too safe here
                 val validChapter =
                     currentChapter != null && currentChapter >= 0 && currentChapter < titles.size
-                if (validChapter && currentChapter != null) {
+                if (validChapter) {
                     builderSingle.setTitle(titles[currentChapter].asString(this)) //  "Select Chapter"
                 } else {
                     builderSingle.setTitle(R.string.select_chapter)
@@ -878,7 +886,7 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
                 dialog.show()
 
                 dialog.listView.choiceMode = AbsListView.CHOICE_MODE_SINGLE
-                if (validChapter && currentChapter != null) {
+                if (validChapter) {
                     dialog.listView.setSelection(currentChapter)
                     dialog.listView.setItemChecked(currentChapter, true)
                 }
@@ -1085,6 +1093,7 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
             })
         }
 
+        //here inserted novel chapter text into recyclerview
         observe(viewModel.chapter) { chapter ->
             cachedChapter = chapter.data
 
@@ -1184,6 +1193,18 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
                 }
             }
 
+            binding.readSettingsTextVerticalPaddingText.setOnClickListener {
+                it.popupMenu(
+                    items = listOf(1 to R.string.reset_value),
+                    selectedItemId = null
+                ) {
+                    if (itemId == 1) {
+                        viewModel.textVerticalPadding = 7.5f
+                        binding.readSettingsTextVerticalPadding.setValueRounded(viewModel.textVerticalPadding)
+                    }
+                }
+            }
+
             binding.readSettingsTtsPitch.apply {
                 setValueRounded(viewModel.ttsPitch)
                 addOnChangeListener { slider, value, fromUser ->
@@ -1238,6 +1259,14 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
                 }
             }
 
+            binding.readSettingsTextVerticalPadding.apply {
+                setValueRounded(viewModel.textVerticalPadding)
+                addOnChangeListener { slider, value, fromUser ->
+                    viewModel.textVerticalPadding = value
+                }
+            }
+
+
             binding.readShowFonts.apply {
                 //text = UIHelper.parseFontFileName(getKey(EPUB_FONT))
                 setOnClickListener {
@@ -1289,6 +1318,11 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
                     binding.readMlFrom.text =
                         ReadActivityViewModel.MLSettings.fromShortToDisplay(viewModel.mlFromLanguage)
                 }
+            }
+
+            binding.readOnlineTranslationSwitch.isChecked = viewModel.mlUseOnlineTransaltion
+            binding.readOnlineTranslationSwitch.setOnCheckedChangeListener { _, isChecked ->
+                viewModel.mlUseOnlineTransaltion = isChecked
             }
 
             binding.readApplyTranslation.setOnClickListener { view ->
@@ -1491,6 +1525,7 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
                 readSettingsKeepScreenActive.setOnCheckedChangeListener { _, isChecked ->
                     viewModel.screenAwake = isChecked
                 }
+
             }
 
             val bgColors = resources.getIntArray(R.array.readerBgColors)

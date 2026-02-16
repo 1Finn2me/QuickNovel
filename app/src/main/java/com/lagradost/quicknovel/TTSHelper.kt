@@ -60,10 +60,10 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
     private var TTSStartSpeakId = 0
     private var TTSEndSpeakId = 0
 
-    private var speed : Float = 1.0f
-    private var pitch : Float = 1.0f
+    private var speed: Float = 1.0f
+    private var pitch: Float = 1.0f
 
-    fun isValidTTS() : Boolean {
+    fun isValidTTS(): Boolean {
         return tts != null
     }
 
@@ -72,12 +72,12 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
         TTSQueue = null
     }
 
-    fun setSpeed(speed : Float) {
+    fun setSpeed(speed: Float) {
         this.speed = speed
         tts?.setSpeechRate(speed)
     }
 
-    fun setPitch(pitch : Float) {
+    fun setPitch(pitch: Float) {
         this.pitch = pitch
         tts?.setPitch(pitch)
     }
@@ -200,7 +200,7 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
                             ?: pendingTTS.defaultVoice
 
                     if (canSetLanguage == TextToSpeech.LANG_MISSING_DATA || canSetLanguage == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        CommonActivity.showToast("Unable to initialize TTS, download the language")
+                        CommonActivity.showToast(R.string.tts_language_error)
                         return@coroutineScope null
                     }
 
@@ -365,7 +365,11 @@ data class LoadingSpanned(val url: String?, override val index: Int) : SpanDispl
     val text get() = url?.let { txt(R.string.loading_format, it) } ?: txt(R.string.loading)
 }
 
-data class FailedSpanned(val reason: UiText, override val index: Int, val canReload: Boolean) :
+data class FailedSpanned(
+    val reason: UiText,
+    override val index: Int,
+    val cause: Throwable?
+) :
     SpanDisplay() {
     override val innerIndex: Int = 0
     override fun id(): Long {
@@ -546,7 +550,18 @@ object TTSHelper {
         document.select("style").remove()
         document.select("script").remove()
 
-        if(!authorNotes) {
+        //This is for poorly generated epubs
+        val titleElement = document.selectFirst("title")
+        if (titleElement != null) {
+            val titleText = titleElement.text().trim()
+            //Poorly generated epubs often have the location of their HTML as the title. They look very ugly, so I remove them
+            val pathRegex = Regex("^(/|[a-zA-Z]:[\\\\/]).*")
+            if (pathRegex.matches(titleText)) {
+                titleElement.remove()
+            }
+        }
+
+        if (!authorNotes) {
             document.select("div.qnauthornotecontainer").remove()
         }
 

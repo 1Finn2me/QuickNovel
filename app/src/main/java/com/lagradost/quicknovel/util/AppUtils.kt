@@ -1,5 +1,6 @@
 package com.lagradost.quicknovel.util
 
+import android.R.attr.text
 import android.app.ActivityManager
 import android.content.Context
 import com.fasterxml.jackson.databind.DeserializationFeature
@@ -44,4 +45,17 @@ object AppUtils {
         } catch (t: Throwable) {
             false
         }
+    fun String.textToHtmlChapter(): String {
+        return this
+            .replace(Regex("((?<=\\p{Ll}(\\.{2,5})?),?) \\n(?=\\p{Ll})"), " ")
+            .split(Regex("\\n"))
+            .joinToString("") { paragraph ->
+                if (paragraph.trim().isNotBlank()) {
+                    paragraph.split(Regex("(?<=(?<!\\.)\\.)(?=\\s+)"))
+                        .joinToString("") { "<p>${it}</p>" } + "</br>"
+                } else {
+                    "</br>"
+                }
+            }
+    }
 }

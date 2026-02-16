@@ -34,6 +34,7 @@ import com.lagradost.nicehttp.ignoreAllSSLErrors
 import com.lagradost.quicknovel.APIRepository.Companion.providersActive
 import com.lagradost.quicknovel.BookDownloader2.openQuickStream
 import com.lagradost.quicknovel.BookDownloader2Helper.IMPORT_SOURCE
+import com.lagradost.quicknovel.BookDownloader2Helper.IMPORT_SOURCE_PDF
 import com.lagradost.quicknovel.BookDownloader2Helper.checkWrite
 import com.lagradost.quicknovel.BookDownloader2Helper.createQuickStream
 import com.lagradost.quicknovel.BookDownloader2Helper.requestRW
@@ -77,6 +78,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import java.lang.ref.WeakReference
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.reflect.KClass
 
@@ -109,6 +111,7 @@ class MainActivity : AppCompatActivity() {
             OkHttpClient()
                 .newBuilder()
                 .ignoreAllSSLErrors()
+                .readTimeout(50L, TimeUnit.SECONDS)//to online translations
                 .build(),
             responseParser = object : ResponseParser {
                 val mapper: ObjectMapper = jacksonObjectMapper().configure(
@@ -135,6 +138,7 @@ class MainActivity : AppCompatActivity() {
         ).apply {
             defaultHeaders = mapOf("user-agent" to USER_AGENT)
         }
+
 
         // === API ===
         lateinit var navOptions: NavOptions
@@ -340,6 +344,7 @@ class MainActivity : AppCompatActivity() {
     }
 
 
+    //imports area -------------------------------
     private val epubPathPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             safe {
@@ -355,11 +360,18 @@ class MainActivity : AppCompatActivity() {
 
                 val file = SafeFile.fromUri(ctx, uri)
                 val fileName = file?.name()
+
+                val mimeType = ctx.contentResolver.getType(uri)
                 println("Loaded epub file. Selected URI path: $uri - Name: $fileName")
 
                 ioSafe {
                     try {
-                        BookDownloader2.downloadWorkThread(uri, ctx)
+                        if (mimeType == "application/pdf" || fileName?.endsWith(".pdf") == true) {
+                            BookDownloader2.downloadPDFWorkThread(uri, ctx)
+                        }
+                        else{
+                            BookDownloader2.downloadWorkThread(uri, ctx)
+                        }
                     } catch (t : Throwable) {
                         logError(t)
                         showToast(t.message)
@@ -375,7 +387,7 @@ class MainActivity : AppCompatActivity() {
                     //"text/plain",
                     //"text/str",
                     //"application/octet-stream",
-                    //"application/pdf",
+                    "application/pdf",
                     "application/epub+zip",
                 )
             )
@@ -623,8 +635,8 @@ class MainActivity : AppCompatActivity() {
                             hidePreviewPopupDialog()
                         }
 
-                        readMore.isVisible = viewModel.apiName != IMPORT_SOURCE
-                        bookmark.isVisible = viewModel.apiName != IMPORT_SOURCE
+                        readMore.isVisible = viewModel.apiName != IMPORT_SOURCE && viewModel.apiName != IMPORT_SOURCE_PDF
+                        bookmark.isVisible = viewModel.apiName != IMPORT_SOURCE && viewModel.apiName != IMPORT_SOURCE_PDF
 
                         resultviewPreviewLoading.isVisible = false
                         resultviewPreviewResult.isVisible = true
@@ -644,7 +656,8 @@ class MainActivity : AppCompatActivity() {
                             hidePreviewPopupDialog()
                         }
 
-                        resultviewPreviewDescription.text = d.synopsis ?: "No data"
+                        resultviewPreviewDescription.text = d.synopsis ?: getString(R.string.no_data)
+
                         resultviewPreviewDescription.setOnClickListener { view ->
                             view.context?.let { ctx ->
                                 val builder: AlertDialog.Builder =
@@ -670,7 +683,7 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         if (d is StreamResponse) {
-                            resultviewPreviewMetaChapters.text = "${d.data.size} Chapters"
+                            resultviewPreviewMetaChapters.text = "${d.data.size} ${getString(R.string.chapter_sort)}"
                             resultviewPreviewMetaChapters.isVisible = d.data.isNotEmpty()
                         } else {
                             resultviewPreviewMetaChapters.isVisible = false

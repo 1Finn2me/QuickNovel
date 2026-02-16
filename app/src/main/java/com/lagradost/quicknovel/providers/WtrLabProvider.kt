@@ -1,6 +1,19 @@
 package com.lagradost.quicknovel.providers
 
+import android.graphics.ColorSpace.match
+import android.util.Base64
+import android.util.Log
+import android.webkit.CookieManager
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
+import com.lagradost.nicehttp.NiceResponse
+import com.lagradost.nicehttp.Requests
+import com.lagradost.nicehttp.ResponseParser
+import com.lagradost.nicehttp.ignoreAllSSLErrors
 import com.lagradost.quicknovel.ChapterData
 import com.lagradost.quicknovel.ErrorLoadingException
 import com.lagradost.quicknovel.HeadMainPageResponse
@@ -16,7 +29,10 @@ import com.lagradost.quicknovel.newStreamResponse
 import com.lagradost.quicknovel.setStatus
 import com.lagradost.quicknovel.toRate
 import com.lagradost.quicknovel.util.AppUtils.parseJson
-import android.util.Log
+import android.util.Logimport javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
+
 
 class WtrLabProvider : MainAPI() {
     override val name = "WTR-LAB"
@@ -159,24 +175,10 @@ class WtrLabProvider : MainAPI() {
 
             // Remove raw title element to get clean title
             titleHolder.selectFirst(".rawtitle")?.remove()
-            val name = titleHolder.text().trim()
-            if (name.isBlank()) return@mapNotNull null
 
-            // Try multiple selectors for image
-            val imgElement = element.selectFirst(".img-wrap img")
-                ?: element.selectFirst(".image-wrap img")
-                ?: element.selectFirst("a img")
-                ?: element.selectFirst("img")
-
-            val rawPosterUrl = imgElement?.attr("data-src")
-                ?: imgElement?.attr("src")
-                ?: imgElement?.attr("data-lazy-src")
-
-            val fixedUrl = if (href.startsWith("http")) href else "$mainUrl$href"
-
-            newSearchResponse(name, fixedUrl) {
-                posterUrl = fixImageUrl(rawPosterUrl)
-                rating = element.selectFirst(".rating-text")?.text()?.toRate(5)
+            val name = titleHolder.text() ?: return@mapNotNull null
+            newSearchResponse(name, href) {
+                posterUrl = fixUrlNull(select.selectFirst("a img")?.attr("src"))
             }
         }
     }
@@ -187,15 +189,11 @@ class WtrLabProvider : MainAPI() {
         start: Long,
         end: Long
     ): List<ChapterData> {
-        val chapterDataUrl = "$mainUrl/api/chapters/$rawId?start=$start&end=$end"
-        Log.d(TAG, "Fetching chapters: $chapterDataUrl")
-
-        return try {
-            val response = app.get(chapterDataUrl).text
-            Log.d(TAG, "Chapters response length: ${response.length}")
-
-            val chaptersData = parseJson<ChaptersApiResponse>(response)
-            Log.d(TAG, "Parsed ${chaptersData.chapters.size} chapters")
+        val chapterDataUrl =
+            "$mainUrl/api/chapters/${chaptersJson.props.pageProps.serie.serieData.rawId}?start=$start&end=$end"
+        val chaptersDataJson =
+            app.get(chapterDataUrl).text
+        val chaptersData = parseJson<ResultChaptersJsonResponse.Root>(chaptersDataJson)
 
             chaptersData.chapters.map { chapter ->
                 // Build chapter URL - use the novel URL + /chapter-{order}
@@ -229,24 +227,10 @@ class WtrLabProvider : MainAPI() {
 
         // Parse JSON data from Next.js
         val jsonNode = doc.selectFirst("#__NEXT_DATA__")
-            ?: throw ErrorLoadingException("Could not find page data")
-        val json = jsonNode.data()
-        if (json.isBlank()) throw ErrorLoadingException("Empty page data")
+        val json = jsonNode?.data() ?: throw ErrorLoadingException("no chapters")
+        val chaptersJson = parseJson<ResultJsonResponse.Root>(json)
 
-        Log.d(TAG, "JSON data length: ${json.length}")
 
-        val pageData = try {
-            parseJson<SeriePageResponse>(json)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error parsing page JSON: ${e.message}", e)
-            throw ErrorLoadingException("Failed to parse page data: ${e.message}")
-        }
-
-        val serieData = pageData.props.pageProps.serie.serieData
-        Log.d(TAG, "Raw ID: ${serieData.rawId}, Total chapters: ${serieData.rawChapterCount}")
-
-        // Get all chapters
-        val totalChapters = serieData.rawChapterCount
         val chapters = mutableListOf<ChapterData>()
 
         if (totalChapters <= CHAPTERS_PER_REQUEST) {
@@ -303,242 +287,533 @@ class WtrLabProvider : MainAPI() {
             .filter { it.isNotBlank() }
 
         return newStreamResponse(title, url, chapters) {
-            this.synopsis = synopsis
-            this.posterUrl = posterUrl
-            this.rating = rating
-            this.author = author
-            this.views = views
-            this.tags = genres
-            setStatus(statusText)
+            synopsis = doc.selectFirst(".desc-wrap")?.text()
+            posterUrl = fixUrlNull(doc.selectFirst(".image-wrap > img")?.attr("src"))
+            views =
+                doc.select(".detail-line").find { it.text().contains("Views") }?.text()?.split(" ")
+                    ?.getOrNull(0)?.toIntOrNull()
+            // author = doc.select(".author-wrap>a").text()
+            rating = doc.selectFirst(".rating-text")?.text()?.toRate(5)
         }
     }
 
-    override suspend fun loadHtml(url: String): String? {
-        Log.d(TAG, "Loading chapter HTML: $url")
+    override suspend fun loadHtml(url: String): String {
+        val doc = app.get(url).document
+        val jsonNode = doc.selectFirst("#__NEXT_DATA__")
+        val json = jsonNode?.data() ?: throw ErrorLoadingException("no chapters")
+        val chaptersJson = parseJson<LoadJsonResponse.Root>(json)
+        val text = StringBuilder()
+        val chapter = chaptersJson.props.pageProps.serie
 
-        try {
-            val doc = app.get(url).document
-
-            // Parse JSON data from Next.js
-            val jsonNode = doc.selectFirst("#__NEXT_DATA__")
-            if (jsonNode == null) {
-                Log.e(TAG, "Could not find #__NEXT_DATA__ on chapter page")
-                // Fallback: try to get content directly from page
-                val directContent = doc.selectFirst(".chapter-body")?.html()
-                    ?: doc.selectFirst(".chapter-content")?.html()
-                    ?: doc.selectFirst(".content")?.html()
-
-                if (!directContent.isNullOrBlank()) {
-                    Log.d(TAG, "Using direct content fallback")
-                    return directContent
-                }
-                throw ErrorLoadingException("Could not find chapter data")
-            }
-
-            val json = jsonNode.data()
-            if (json.isBlank()) {
-                Log.e(TAG, "Empty JSON data on chapter page")
-                throw ErrorLoadingException("Empty chapter data")
-            }
-
-            Log.d(TAG, "Chapter JSON length: ${json.length}")
-
-            val chapterData = try {
-                parseJson<ChapterPageResponse>(json)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error parsing chapter JSON: ${e.message}")
-                Log.d(TAG, "JSON preview: ${json.take(500)}")
-                throw ErrorLoadingException("Failed to parse chapter data: ${e.message}")
-            }
-
-            val chapter = chapterData.props.pageProps.serie.chapter
-            Log.d(TAG, "Chapter slug: ${chapter.slug}, rawId: ${chapter.rawId}")
-
-            if (chapter.rawId == 0L || chapter.slug.isBlank()) {
-                Log.e(TAG, "Invalid chapter data - rawId: ${chapter.rawId}, slug: ${chapter.slug}")
-                throw ErrorLoadingException("Invalid chapter data")
-            }
-
-            // Fetch translated content via API
-            Log.d(TAG, "Fetching translation from API")
-            val response = app.post(
-                url = "$mainUrl/api/reader/get",
-                data = mapOf(
-                    "chapter_no" to chapter.slug,
-                    "language" to "en",
-                    "raw_id" to chapter.rawId.toString(),
-                    "retry" to "false",
-                    "translate" to "web"
+        val root = app.post(
+            "$mainUrl/api/reader/get", data = mapOf(
+                "chapter_id" to chapter.chapter.id.toString(),
+                "chapter_no" to chapter.serieData.slug.toString(),
+                "force_retry" to "false",
+                "language" to "en",
+                "raw_id" to chapter.serieData.rawId.toString(),
+                "retry" to "false",
+                "translate" to "web", // translate=ai just returns a job and I am too lazy to fix that
                 )
-            )
+        ).parsed<LoadJsonResponse2.Root>()
+        val paragraphs = decryptContent(root.data.data.body)
 
-            val responseText = response.text
-            Log.d(TAG, "API response length: ${responseText.length}")
+        for (p in paragraphs) {
+            text.append("<p>")
+            text.append(p)
+            text.append("</p>")
+        }
 
-            if (responseText.isBlank()) {
-                Log.e(TAG, "Empty API response")
-                throw ErrorLoadingException("Empty translation response")
+        /*for (select in doc.select(".chapter-body>p")) {
+            if (select.ownText().contains("window._taboola")) {
+                select.remove()
             }
+        }*/
 
-            val contentData = try {
-                parseJson<ReaderApiResponse>(responseText)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error parsing API response: ${e.message}")
-                Log.d(TAG, "Response preview: ${responseText.take(500)}")
-                throw ErrorLoadingException("Failed to parse translation: ${e.message}")
-            }
+        return text.toString()//doc.selectFirst(".chapter-body")?.html()
+    }
 
-            val bodyParagraphs = contentData.data.data.body
-            Log.d(TAG, "Body paragraphs count: ${bodyParagraphs.size}")
+    fun decryptContent(encryptedText: String): List<String> {
+        if (encryptedText.isEmpty()) return emptyList()
 
-            if (bodyParagraphs.isEmpty()) {
-                Log.e(TAG, "No paragraphs in response")
+        var isArray = false
+        var rawText = encryptedText
 
-                // Try alternative: maybe the translation isn't ready, try AI translation
-                Log.d(TAG, "Trying AI translation as fallback")
-                val aiResponse = app.post(
-                    url = "$mainUrl/api/reader/get",
-                    data = mapOf(
-                        "chapter_no" to chapter.slug,
-                        "language" to "en",
-                        "raw_id" to chapter.rawId.toString(),
-                        "retry" to "false",
-                        "translate" to "ai"
-                    )
-                )
+        if (encryptedText.startsWith("arr:")) {
+            isArray = true
+            rawText = encryptedText.removePrefix("arr:")
+        } else if (encryptedText.startsWith("str:")) {
+            rawText = encryptedText.removePrefix("str:")
+        }
 
-                val aiContentData = try {
-                    parseJson<ReaderApiResponse>(aiResponse.text)
-                } catch (e: Exception) {
-                    null
-                }
+        val parts = rawText.split(":")
+        if (parts.size != 3) throw IllegalArgumentException("Invalid format")
 
-                val aiBody = aiContentData?.data?.data?.body
-                if (!aiBody.isNullOrEmpty()) {
-                    Log.d(TAG, "AI translation paragraphs: ${aiBody.size}")
-                    return buildString {
-                        for (paragraph in aiBody) {
-                            if (!paragraph.contains("window._taboola") &&
-                                !paragraph.contains("<script") &&
-                                !paragraph.contains("googletag")
-                            ) {
-                                append("<p>")
-                                append(paragraph)
-                                append("</p>")
-                            }
-                        }
-                    }.ifBlank { null }
-                }
+        val ivBytes = Base64.decode(parts[0], Base64.DEFAULT)
+        val shortCipher = Base64.decode(parts[1], Base64.DEFAULT)
+        val longCipher = Base64.decode(parts[2], Base64.DEFAULT)
 
-                return null
-            }
+        val cipherBytes = ByteArray(longCipher.size + shortCipher.size)
+        System.arraycopy(longCipher, 0, cipherBytes, 0, longCipher.size)
+        System.arraycopy(shortCipher, 0, cipherBytes, longCipher.size, shortCipher.size)
 
-            // Build HTML content, filtering out ad scripts
-            return buildString {
-                for (paragraph in bodyParagraphs) {
-                    // Skip ad/tracking scripts
-                    if (paragraph.contains("window._taboola") ||
-                        paragraph.contains("<script") ||
-                        paragraph.contains("googletag")
-                    ) {
-                        continue
-                    }
+        val keyString = "IJAFUUxjM25hyzL2AZrn0wl7cESED6Ru"
+        val keyBytes = keyString.substring(0, 32).toByteArray(Charsets.UTF_8)
+        val secretKey = SecretKeySpec(keyBytes, "AES")
 
-                    append("<p>")
-                    append(paragraph)
-                    append("</p>")
-                }
-            }.ifBlank { null }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val gcmSpec = GCMParameterSpec(128, ivBytes)
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, gcmSpec)
 
-        } catch (e: ErrorLoadingException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "Unexpected error in loadHtml: ${e.message}", e)
-            throw ErrorLoadingException("Failed to load chapter: ${e.message}")
+        val decryptedBytes = cipher.doFinal(cipherBytes)
+        val decryptedText = decryptedBytes.toString(Charsets.UTF_8)
+
+        return if (isArray) {
+            parseJson<List<String>>(decryptedText)
+        } else {
+            listOf(decryptedText)
         }
     }
+
+
 }
 
-// ============ API Response Data Classes ============
+object ResultChaptersJsonResponse {
+    data class Root(
+        val chapters: List<Chapter>,
+    )
+    data class Chapter(
+        @JsonProperty("serie_id")
+        val serieId: Long,
+        val id: Long,
+        val order: Long,
+        val title: String,
+        val name: String,
+        @JsonProperty("updated_at")
+        val updatedAt: String,
+    )
+}
 
-// Chapters API Response
-data class ChaptersApiResponse(
-    val chapters: List<ChapterItem> = emptyList()
-)
+object ResultJsonResponse {
+    data class Root(
+        val props: Props,
+        /*val page: String,
+        val query: Query,
+        val buildId: String,
+        val isFallback: Boolean,
+        val isExperimentalCompile: Boolean,
+        val gssp: Boolean,
+        val locale: String,
+        val locales: List<String>,
+        val defaultLocale: String,
+        val scriptLoader: List<Any?>,*/
+    )
 
-data class ChapterItem(
-    @JsonProperty("serie_id")
-    val serieId: Long = 0,
-    val id: Long = 0,
-    val order: Long = 0,
-    val title: String = "",
-    val name: String = "",
-    @JsonProperty("updated_at")
-    val updatedAt: String = ""
-)
+    data class Props(
+        val pageProps: PageProps,
+        // @JsonProperty("__N_SSP")
+        /// val nSsp: Boolean,
+    )
 
-// Serie Page Response (for load())
-data class SeriePageResponse(
-    val props: SeriePageProps = SeriePageProps()
-)
+    data class PageProps(
+        val serie: Serie,
+        /*val tags: List<Tag>,
+        @JsonProperty("server_time")
+        val serverTime: String,
+        @JsonProperty("disabe_ads")
+        val disabeAds: Boolean,
+        @JsonProperty("_sentryTraceData")
+        val sentryTraceData: String,
+        @JsonProperty("_sentryBaggage")
+        val sentryBaggage: String,*/
+    )
 
-data class SeriePageProps(
-    val pageProps: SeriePagePropsInner = SeriePagePropsInner()
-)
+    data class Serie(
+        @JsonProperty("serie_data")
+        val serieData: SerieData,
+        /*val ranks: Ranks,
+        val recommendation: List<Recommendation>,
+        val raws: List<Raw3>,
+        val names: List<Name>,
+        @JsonProperty("other_series")
+        val otherSeries: List<Series>,
+        @JsonProperty("last_chapters")
+        val lastChapters: List<LastChapter>,*/
+        /*@JsonProperty("raw_rank")
+        val rawRank: Any?,
+        @JsonProperty("released_user")
+        val releasedUser: Any?,*/
+    )
 
-data class SeriePagePropsInner(
-    val serie: SerieWrapper = SerieWrapper()
-)
+    data class SerieData(
+        @JsonProperty("raw_id")
+        val rawId: Long,
+        /*
+        val id: Long,val slug: String,
+        @JsonProperty("search_text")
+        val searchText: String,
+        val status: Long,
+        val data: Data,
+        @JsonProperty("created_at")
+        val createdAt: String,
+        @JsonProperty("updated_at")
+        val updatedAt: String,
+        val view: Long,
+        @JsonProperty("in_library")
+        val inLibrary: Long,
+        val rating: Any?,
+        @JsonProperty("chapter_count")
+        val chapterCount: Long,
+        val power: Long,
+        @JsonProperty("total_rate")
+        val totalRate: Long,
+        @JsonProperty("user_status")
+        val userStatus: Long,
+        val verified: Boolean,
+        val from: String,
+        val author: String,
+        @JsonProperty("ai_enabled")
+        val aiEnabled: Boolean,
+        @JsonProperty("released_by")
+        val releasedBy: Any?,
+        @JsonProperty("raw_status")
+        val rawStatus: Long,*/
+        @JsonProperty("raw_chapter_count")
+        val rawChapterCount: Long,
+        /*
+        val genres: List<Long>,
+        @JsonProperty("raw_verified")
+        val rawVerified: Boolean,
+        @JsonProperty("requested_by")
+        val requestedBy: String,
+        @JsonProperty("requested_by_name")
+        val requestedByName: String,
+        @JsonProperty("requested_member")
+        val requestedMember: String,
+        @JsonProperty("requested_role")
+        val requestedRole: Long,*/
+    )
 
-data class SerieWrapper(
-    @JsonProperty("serie_data")
-    val serieData: SerieData = SerieData()
-)
+    data class Data(
+        val title: String,
+        val author: String,
+        val description: String,
+        @JsonProperty("from_user")
+        val fromUser: String?,
+        val raw: Raw,
+        val image: String,
+    )
 
-data class SerieData(
-    @JsonProperty("raw_id")
-    val rawId: Long = 0,
-    @JsonProperty("raw_chapter_count")
-    val rawChapterCount: Long = 0
-)
+    data class Raw(
+        val title: String,
+        val author: String,
+        val description: String,
+    )
 
-// Chapter Page Response (for loadHtml())
-data class ChapterPageResponse(
-    val props: ChapterPageProps = ChapterPageProps()
-)
+    /*data class Ranks(
+        val week: Any?,
+        val month: Any?,
+        val all: String,
+    )
 
-data class ChapterPageProps(
-    val pageProps: ChapterPagePropsInner = ChapterPagePropsInner()
-)
+    data class Recommendation(
+        @JsonProperty("serie_id")
+        val serieId: Long,
+        @JsonProperty("recommendation_id")
+        val recommendationId: Long,
+        val score: Long,
+        val id: Long,
+        val slug: String,
+        @JsonProperty("search_text")
+        val searchText: String,
+        val status: Long,
+        val data: Data2,
+        @JsonProperty("created_at")
+        val createdAt: String,
+        @JsonProperty("updated_at")
+        val updatedAt: String,
+        val view: Long,
+        @JsonProperty("in_library")
+        val inLibrary: Long,
+        val rating: Double?,
+        @JsonProperty("chapter_count")
+        val chapterCount: Long,
+        val power: Long,
+        @JsonProperty("total_rate")
+        val totalRate: Long,
+        @JsonProperty("user_status")
+        val userStatus: Long,
+        val verified: Boolean,
+        val from: String?,
+        val author: String,
+        @JsonProperty("raw_id")
+        val rawId: Long,
+        @JsonProperty("ai_enabled")
+        val aiEnabled: Boolean,
+    )
 
-data class ChapterPagePropsInner(
-    val serie: ChapterSerieWrapper = ChapterSerieWrapper()
-)
+    data class Data2(
+        val title: String,
+        val author: String,
+        val description: String,
+        @JsonProperty("from_user")
+        val fromUser: String?,
+        val raw: Raw2,
+        val image: String,
+    )
 
-data class ChapterSerieWrapper(
-    val chapter: ChapterInfo = ChapterInfo()
-)
+    data class Raw2(
+        val title: String,
+        val author: String,
+        val description: String,
+    )
 
-data class ChapterInfo(
-    val id: Long = 0,
-    val slug: String = "",
-    @JsonProperty("raw_id")
-    val rawId: Long = 0,
-    val order: Long = 0,
-    val title: String = "",
-    val name: String = ""
-)
+    data class Raw3(
+        val id: Long,
+        @JsonProperty("chapter_count")
+        val chapterCount: Long,
+        val view: Long,
+        val slug: String,
+        @JsonProperty("created_at")
+        val createdAt: String,
+        val default: Boolean,
+        val verified: Boolean,
+    )
 
-// Reader API Response
-data class ReaderApiResponse(
-    val data: ReaderDataWrapper = ReaderDataWrapper()
-)
+    data class Name(
+        val title: String,
+        @JsonProperty("raw_title")
+        val rawTitle: String,
+    )
 
-data class ReaderDataWrapper(
-    val data: ReaderContent = ReaderContent()
-)
+    data class Series(
+        val id: Long,
+        val slug: String,
+        @JsonProperty("search_text")
+        val searchText: String,
+        val status: Long,
+        val data: Data3,
+        @JsonProperty("created_at")
+        val createdAt: String,
+        @JsonProperty("updated_at")
+        val updatedAt: String,
+        val view: Long,
+        @JsonProperty("in_library")
+        val inLibrary: Long,
+        val rating: Double,
+        @JsonProperty("chapter_count")
+        val chapterCount: Long,
+        val power: Long,
+        @JsonProperty("total_rate")
+        val totalRate: Long,
+        @JsonProperty("user_status")
+        val userStatus: Long,
+        val verified: Boolean,
+        val from: String,
+        val author: String,
+        @JsonProperty("raw_id")
+        val rawId: Long,
+    )
 
-data class ReaderContent(
-    val body: List<String> = emptyList(),
-    val title: String = ""
-)
+    data class Data3(
+        val title: String,
+        val author: String,
+        val description: String,
+        @JsonProperty("from_user")
+        val fromUser: String,
+        val raw: Raw4,
+        val image: String,
+    )
+
+    data class Raw4(
+        val title: String,
+        val author: String,
+        val description: String,
+    )
+
+    data class LastChapter(
+        //@JsonProperty("serie_id")
+        //val serieId: Long,
+        //val id: Long,
+        val order: Long,
+        val title: String,
+        //val name: String,
+        @JsonProperty("updated_at")
+        val updatedAt: String?,
+    )
+
+    data class Tag(
+        val id: Long,
+        val title: String,
+        val slug: String,
+    )
+
+    data class Query(
+        val sid: String,
+        @JsonProperty("serie_slug")
+        val serieSlug: String,
+    )*/
+}
+
+object LoadJsonResponse2 {
+
+    data class Root(
+        // val success: Boolean,
+        // val chapter: Chapter,
+        val data: Data,
+    )
+
+    data class Chapter(
+        val id: Long,
+        @JsonProperty("raw_id")
+        val rawId: Long,
+        val order: Long,
+        val title: String,
+    )
+
+    data class Data(
+        /*@JsonProperty("raw_id")
+        val rawId: Long,
+        @JsonProperty("chapter_id")
+        val chapterId: Long,
+        val status: Long,
+        */
+        val data: Data2,
+        /*@JsonProperty("created_at")
+        val createdAt: String,
+        val language: String,*/
+    )
+
+    data class Data2(
+        val body: String = "",
+        /*val hans: String,
+        val hash: String,
+        val model: String,
+        val patch: Any?,
+        val title: String,
+        val prompt: String,
+        @JsonProperty("glossory_hash")
+        val glossoryHash: String,
+        @JsonProperty("glossary_build")
+        val glossaryBuild: Long,*/
+    )
+    data class Terms(
+        val terms: List<List<String>>,
+    )
+}
+
+object LoadJsonResponse {
+    data class Root(
+        val props: Props,
+        val page: String,
+        val query: Query,
+        val buildId: String,
+        val isFallback: Boolean,
+        val isExperimentalCompile: Boolean,
+        val gssp: Boolean,/*
+        val locale: String,
+        val locales: List<String>,
+        val defaultLocale: String,
+        val scriptLoader: List<Any?>,*/
+    )
+
+    data class Props(
+        val pageProps: PageProps,
+        /*@JsonProperty("__N_SSP")
+        val nSsp: Boolean,
+        */
+    )
+
+    data class PageProps(
+        val serie: Serie,
+        /*@JsonProperty("disabe_ads")
+        val disabeAds: Boolean,
+        @JsonProperty("server_time")
+        val serverTime: String,
+        @JsonProperty("active_service")
+        val activeService: ActiveService,
+        @JsonProperty("_sentryTraceData")
+        val sentryTraceData: String,
+        @JsonProperty("_sentryBaggage")
+        val sentryBaggage: String,*/
+    )
+
+    data class Chapter(
+        val id: Long,
+        val slug: String?,
+        @JsonProperty("raw_id")
+        val rawId: Long,
+        /*@JsonProperty("serie_id")
+        val serieId: Long,
+        val status: Long,
+        val slug: String,
+        val name: String,
+        val order: Long,
+        @JsonProperty("is_update")
+        val isUpdate: Boolean,
+        @JsonProperty("created_at")
+        val createdAt: String,
+        @JsonProperty("updated_at")
+        val updatedAt: String,
+        val title: String,
+        val code: String,*/
+    )
+    data class Serie(
+        @JsonProperty("serie_data")
+        val serieData: SerieData,
+        /*
+        @JsonProperty("default_service")
+        val defaultService: String,*/
+        val chapter: Chapter,
+    )
+
+    data class SerieData(
+        val id: Long,
+        val slug: String,
+        val data: Data,
+        @JsonProperty("raw_id")
+        val rawId: Long,
+        @JsonProperty("user_status")
+        val userStatus: Long,
+        @JsonProperty("is_default")
+        val isDefault: Boolean,
+        @JsonProperty("chapter_count")
+        val chapterCount: Long,
+        @JsonProperty("ai_enabled")
+        val aiEnabled: Boolean,
+        @JsonProperty("raw_status")
+        val rawStatus: Long,
+    )
+
+    data class Data(
+        val title: String,
+        val author: String,
+        val description: String,
+        @JsonProperty("from_user")
+        val fromUser: String,
+        val raw: Raw,
+        val image: String,
+    )
+
+    data class Raw(
+        val title: String,
+        val author: String,
+        val description: String,
+    )
+
+
+
+    data class ActiveService(
+        val id: String,
+        val label: String,
+    )
+
+    data class Query(
+        val locale: String,
+        @JsonProperty("serie_slug")
+        val serieSlug: String,
+        @JsonProperty("chapter_no")
+        val chapterNo: String,
+    )
+
+}

@@ -12,7 +12,7 @@ import android.view.animation.DecelerateInterpolator
 import android.widget.LinearLayout
 import androidx.appcompat.app.AlertDialog
 import androidx.coordinatorlayout.widget.CoordinatorLayout
-import androidx.core.view.isGone
+import androidx.core.view.doOnNextLayout
 import androidx.core.view.isVisible
 import androidx.core.widget.NestedScrollView
 import androidx.core.widget.doOnTextChanged
@@ -38,9 +38,10 @@ import com.lagradost.quicknovel.mvvm.observe
 import com.lagradost.quicknovel.mvvm.observeNullable
 import com.lagradost.quicknovel.ui.ReadType
 import com.lagradost.quicknovel.ui.SortingMethodAdapter
-import com.lagradost.quicknovel.ui.mainpage.MainAdapter2
+import com.lagradost.quicknovel.ui.mainpage.MainAdapter
 import com.lagradost.quicknovel.ui.mainpage.MainPageFragment
 import com.lagradost.quicknovel.util.SettingsHelper.getRating
+import com.lagradost.quicknovel.util.SingleSelectionHelper.showBottomDialog
 import com.lagradost.quicknovel.util.UIHelper
 import com.lagradost.quicknovel.util.UIHelper.colorFromAttribute
 import com.lagradost.quicknovel.util.UIHelper.fixPaddingStatusbar
@@ -121,8 +122,7 @@ class ResultFragment : Fragment() {
 
     private fun updateScrollHeight() {
         val displayMetrics = context?.resources?.displayMetrics ?: return
-        val height = binding.resultDownloadCard.height
-        val total = displayMetrics.heightPixels - height
+        val total = displayMetrics.heightPixels - binding.resultDownloadCard.height
 
         binding.resultNovelHolder.apply {
             setPadding(
@@ -226,7 +226,8 @@ class ResultFragment : Fragment() {
                                 resultTabs.newTab().setText(R.string.related).setId(2)
                             )
                             relatedList.apply {
-                                val mainPageAdapter = MainAdapter2(this, 0)
+                                setRecycledViewPool(MainAdapter.sharedPool)
+                                val mainPageAdapter = MainAdapter(this, 0)
                                 adapter = mainPageAdapter
                                 mainPageAdapter.submitList(res.related)
                             }
@@ -246,15 +247,17 @@ class ResultFragment : Fragment() {
                     }
 
 
-                    viewsAndRating.isVisible = res.views != null || res.peopleVoted != null
+                    //viewsAndRating.isVisible = res.views != null || res.peopleVoted != null
 
-                    resultStatus.text = res.status?.resource?.let { getString(it) } ?: ""
+                    val readStatusText = res.status?.resource?.let { getString(it) } ?: ""
+                    resultStatus.text = readStatusText
+                    resultStatus.isVisible = readStatusText.isNotBlank()
 
                     resultTag.removeAllViews()
                     if (res.tags == null && res.status == null) {
-                        resultTagHolder.isVisible = false
+                        // resultTagHolder.isVisible = false
                     } else {
-                        resultTagHolder.isGone = res.tags.isNullOrEmpty()
+                        // resultTagHolder.isGone = res.tags.isNullOrEmpty()
                         resultTag.apply {
 
                             val map =
@@ -315,6 +318,10 @@ class ResultFragment : Fragment() {
                     }
 
                     if (res is StreamResponse) {
+                        resultChaptersInfoHolder.isVisible = true
+                        resultChapters.text = res.data.size.toString()
+                        resultChaptersInfo.text =
+                            if (res.data.size == 1) getString(R.string.chapter) else getString(R.string.chapters)
                         resultQuickstream.isVisible = true
                         resultTotalChapters.isVisible = true
                         if (res.data.isNotEmpty()) {
@@ -324,6 +331,7 @@ class ResultFragment : Fragment() {
                             resultTotalChapters.text = getString(R.string.no_chapters)
                         }
                     } else {
+                        resultChaptersInfoHolder.isVisible = false
                         resultTotalChapters.isVisible = false
                         resultQuickstream.isVisible = false
                     }
@@ -332,8 +340,14 @@ class ResultFragment : Fragment() {
                     resultLoadingError.isVisible = false
                     resultHolder.isVisible = true
                     resultPosterBlur.isVisible = true
+                    resultHolder.doOnNextLayout {
+                        updateScrollHeight()
+                    }
                     resultHolder.post {
                         updateScrollHeight()
+                        resultHolder.doOnNextLayout {
+                            updateScrollHeight()
+                        }
                     }
                 }
             }
@@ -482,7 +496,7 @@ class ResultFragment : Fragment() {
         binding.apply {
             activity?.fixPaddingStatusbar(resultInfoHeader)
 
-            resultOpeninbrowerText.text = apiName //""// resultUrl
+            //resultOpeninbrowerText.text = apiName //""// resultUrl
 
             resultReloadConnectionerror.setOnClickListener {
                 viewModel.initState(apiName, url)
@@ -529,8 +543,8 @@ class ResultFragment : Fragment() {
                 viewModel.share()
             }
 
-            val reviewAdapter = ReviewAdapter2()
-
+            val reviewAdapter = ReviewAdapter()
+            resultReviews.setRecycledViewPool(ReviewAdapter.sharedPool)
             resultReviews.adapter = reviewAdapter
             resultReviews.layoutManager = GridLayoutManager(context, 1)
 
@@ -567,11 +581,14 @@ class ResultFragment : Fragment() {
             })
 
             resultBookmark.setOnClickListener { view ->
-                view.popupMenu(
-                    ReadType.entries.map { it.prefValue to it.stringRes },
-                    selectedItemId = viewModel.readState.value?.prefValue
-                ) {
-                    viewModel.bookmark(itemId)
+                val context = view.context ?: return@setOnClickListener
+                context.showBottomDialog(
+                    ReadType.entries.map { context.getString(it.stringRes) },
+                    selectedIndex = ReadType.entries.map { it.prefValue }
+                        .indexOf(viewModel.readState.value?.prefValue),
+                    context.getString(R.string.bookmark), false, {}
+                ) { selected ->
+                    viewModel.bookmark(ReadType.entries[selected].prefValue)
                 }
             }
 
@@ -631,13 +648,20 @@ class ResultFragment : Fragment() {
             }
         }
 
-        observe(viewModel.readState) {
-            binding.resultBookmark.setImageResource(if (it == ReadType.NONE) R.drawable.ic_baseline_bookmark_border_24 else R.drawable.ic_baseline_bookmark_24)
+        observe(viewModel.readState) { state ->
+            binding.resultBookmark.setText(if (state == ReadType.NONE) R.string.bookmark else state.stringRes)
+            binding.resultBookmark.setCompoundDrawablesWithIntrinsicBounds(
+                0,
+                0,
+                0,
+                if (state == ReadType.NONE) R.drawable.ic_baseline_bookmark_border_24 else R.drawable.ic_baseline_bookmark_24
+                //if (it == ReadType.NONE) R.drawable.ic_baseline_bookmark_border_24 else R.drawable.ic_baseline_bookmark_24
+            )
         }
         observe(viewModel.loadResponse, ::newState)
 
-
         binding.chapterList.apply {
+            setRecycledViewPool(ChapterAdapter.sharedPool)
             val mainPageAdapter = ChapterAdapter(viewModel)
             adapter = mainPageAdapter
             setHasFixedSize(true)

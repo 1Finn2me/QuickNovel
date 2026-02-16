@@ -21,6 +21,7 @@ import com.lagradost.quicknovel.ChapterStartSpanned
 import com.lagradost.quicknovel.CommonActivity.showToast
 import com.lagradost.quicknovel.FailedSpanned
 import com.lagradost.quicknovel.LoadingSpanned
+import com.lagradost.quicknovel.MLException
 import com.lagradost.quicknovel.R
 import com.lagradost.quicknovel.ReadActivityViewModel
 import com.lagradost.quicknovel.SpanDisplay
@@ -39,6 +40,7 @@ import com.lagradost.quicknovel.util.UIHelper
 import com.lagradost.quicknovel.util.UIHelper.popupMenu
 import com.lagradost.quicknovel.util.UIHelper.showImage
 import com.lagradost.quicknovel.util.UIHelper.systemFonts
+import com.lagradost.quicknovel.util.toPx
 import io.noties.markwon.image.AsyncDrawable
 import io.noties.markwon.image.AsyncDrawableSpan
 import java.io.File
@@ -166,6 +168,7 @@ const val CONFIG_SIZE = 1 shl 2
 const val CONFIG_FONT_BOLD = 1 shl 3
 const val CONFIG_FONT_ITALIC = 1 shl 4
 const val CONFIG_BG_COLOR = 1 shl 5
+const val CONFIG_PADDING = 1 shl 6
 
 // this uses val to make it explicit copy because of lazy properties
 data class TextConfig(
@@ -177,6 +180,8 @@ data class TextConfig(
     val backgroundColor: Int,
     val bionicReading: Boolean,
     val isTextSelectable: Boolean,
+    /** Vertical text padding in dp */
+    val verticalPadding: Float,
 ) {
     private val fontFile: File? by lazy {
         if (textFont == "") null else systemFonts.firstOrNull { it.name == textFont }
@@ -204,6 +209,11 @@ data class TextConfig(
 
     private fun setTextSize(textView: TextView) {
         textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize.toFloat())
+    }
+
+    private fun setTextPadding(textView: TextView) {
+        val padding = this.verticalPadding.toPx.toInt()
+        textView.setPadding(0, padding, 0, padding)
     }
 
     private fun setTextColor(textView: TextView) {
@@ -243,6 +253,9 @@ data class TextConfig(
         if ((args and CONFIG_SIZE) != 0) {
             setTextSize(textView)
         }
+        if ((args and CONFIG_PADDING) != 0) {
+            setTextPadding(textView)
+        }
     }
 }
 
@@ -274,6 +287,12 @@ class TextAdapter(
     fun changeSize(size: Int): Boolean {
         if (config.textSize == size) return false
         config = config.copy(textSize = size)
+        return true
+    }
+
+    fun changeTextVerticalPadding(padding: Float): Boolean {
+        if (config.verticalPadding == padding) return false
+        config = config.copy(verticalPadding = padding)
         return true
     }
 
@@ -550,13 +569,16 @@ class TextAdapter(
         binding.root.setText(obj.reason)
 
         binding.root.setOnClickListener {
-            if (obj.canReload) {
-                showToast(
-                    txt(R.string.reload_chapter_format, (obj.index + 1).toString())
-                )
-                viewModel.reloadChapter(obj.index)
-            } else {
+            if (obj.cause == null) {
                 viewModel.switchVisibility()
+                return@setOnClickListener
+            }
+
+            showToast(txt(R.string.reload_chapter_format, (obj.index + 1).toString()))
+            if (obj.cause is MLException) {
+                viewModel.reTranslateChapter(obj.index)
+            } else {
+                viewModel.reloadChapter(obj.index)
             }
         }
     }
@@ -672,7 +694,7 @@ class TextAdapter(
             is SingleTextBinding -> {
                 config.setArgs(
                     binding.root,
-                    CONFIG_SIZE or CONFIG_COLOR or CONFIG_FONT
+                    CONFIG_SIZE or CONFIG_COLOR or CONFIG_FONT or CONFIG_PADDING
                 )
             }
 
