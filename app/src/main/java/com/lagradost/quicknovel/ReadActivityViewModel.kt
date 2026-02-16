@@ -307,10 +307,36 @@ class RegularBook(val data: EpubBook) : AbstractBook() {
     }
 
     override fun loadImage(image: String): ByteArray? {
-        return data.resources.resourceMap.values.find { x ->
-            x.mediaType.name.contains("image") && image.endsWith(
-                x.href
-            )
+        // Clean the image path - remove ../ and ./ prefixes, decode URL encoding
+        val cleanImage = try {
+            java.net.URLDecoder.decode(image, "UTF-8")
+        } catch (_: Exception) {
+            image
+        }.removePrefix("../").removePrefix("./")
+
+        val imageFileName = cleanImage.substringAfterLast("/").lowercase()
+
+        return data.resources.resourceMap.values.find { resource ->
+            if (!resource.mediaType.name.contains("image")) return@find false
+
+            val resourceHref = resource.href ?: return@find false
+            val resourceFileName = resourceHref.substringAfterLast("/").lowercase()
+
+            // Method 1: Exact filename match (most reliable)
+            if (resourceFileName == imageFileName) return@find true
+
+            // Method 2: Resource href ends with clean image path
+            // e.g., "OEBPS/Images/img.jpg".endsWith("Images/img.jpg")
+            if (resourceHref.endsWith(cleanImage, ignoreCase = true)) return@find true
+
+            // Method 3: Clean image path ends with resource href
+            // e.g., "../Images/img.jpg" cleaned to "Images/img.jpg" ends with "img.jpg"
+            if (cleanImage.endsWith(resourceHref, ignoreCase = true)) return@find true
+
+            // Method 4: Original image path ends with resource href (for absolute paths)
+            if (image.endsWith(resourceHref, ignoreCase = true)) return@find true
+
+            false
         }?.data
     }
 
@@ -770,10 +796,18 @@ class ReadActivityViewModel : ViewModel() {
 
                     val asyncDrawables = rendered.getSpans<AsyncDrawableSpan>()
                     for (async in asyncDrawables) {
-                        async.drawable.result =
-                            book.loadImageBitmap(async.drawable.destination)?.toDrawable(
-                                Resources.getSystem()
-                            )
+                        try {
+                            val destination = async.drawable.destination
+                            val bitmap = book.loadImageBitmap(destination)
+                            if (bitmap != null) {
+                                val drawable = bitmap.toDrawable(Resources.getSystem())
+                                // Set intrinsic bounds so the image displays properly
+                                drawable.setBounds(0, 0, bitmap.width, bitmap.height)
+                                async.drawable.result = drawable
+                            }
+                        } catch (t: Throwable) {
+                            logError(t)
+                        }
                     }
 
                     // translation may strip stuff, idk how to solve that in a clean way atm

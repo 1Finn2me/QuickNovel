@@ -95,6 +95,8 @@ data class DownloadProgress(
     val downloaded: Long,
 )
 
+
+
 data class DownloadProgressState(
     var state: DownloadState,
     // How many chapters/bytes much have we downloaded, not including skipped chapters
@@ -141,6 +143,32 @@ data class QuickStreamData(
     val poster: String?,
     val data: MutableList<ChapterData>,
 )
+
+/**
+ * Holds sanitized file path components to avoid repeated sanitization
+ */
+data class SanitizedNovelInfo(
+    val apiName: String,
+    val author: String,
+    val name: String,
+    val id: Int
+) {
+    val directory: String get() = BookDownloader2Helper.getDirectory(apiName, author, name)
+
+    companion object {
+        fun create(apiName: String, author: String?, name: String): SanitizedNovelInfo {
+            val sApiName = BookDownloader2Helper.sanitizeFilename(apiName)
+            val sAuthor = BookDownloader2Helper.sanitizeFilename(author ?: "")
+            val sName = BookDownloader2Helper.sanitizeFilename(name)
+            val id = "$sApiName$sAuthor$sName".hashCode()
+            return SanitizedNovelInfo(sApiName, sAuthor, sName, id)
+        }
+
+        fun create(load: LoadResponse, apiName: String): SanitizedNovelInfo {
+            return create(apiName, load.author, load.name)
+        }
+    }
+}
 
 object BookDownloader2Helper {
     const val IMPORT_SOURCE = "Download"
@@ -239,6 +267,52 @@ object BookDownloader2Helper {
         }
     }
 
+    /**
+     * Checks if an EPUB exists either in external storage (generated) or internal storage (downloaded directly).
+     * @return Pair of (exists, isInternalEpub) - isInternalEpub is true if it's a LOCAL_EPUB in internal storage
+     */
+    fun hasEpubDetailed(
+        activity: Activity?,
+        author: String?,
+        name: String,
+        apiName: String
+    ): Pair<Boolean, Boolean> {
+        if (activity == null) return Pair(false, false)
+
+        val sApiName = sanitizeFilename(apiName)
+        val sAuthor = sanitizeFilename(author ?: "")
+        val sName = sanitizeFilename(name)
+
+        // Check internal storage first (LOCAL_EPUB from direct downloads)
+        val internalEpub = File(
+            activity.filesDir.toString() + getDirectory(sApiName, sAuthor, sName),
+            BookDownloader2.LOCAL_EPUB
+        )
+        if (internalEpub.exists() && internalEpub.length() > BookDownloader2.LOCAL_EPUB_MIN_SIZE) {
+            return Pair(true, true)
+        }
+
+        // Check external storage (generated EPUBs)
+        if (!activity.checkWrite()) {
+            return Pair(false, false)
+        }
+
+        val displayName = "${sanitizeFilename(name)}.epub"
+
+        return try {
+            val subDir = activity.getBasePath().first ?: getDefaultDir(activity)
+            val foundFile = subDir?.findFile(displayName)
+            val exists = foundFile?.exists() == true && (foundFile.length() ?: 0L) > BookDownloader2.LOCAL_EPUB_MIN_SIZE
+            Pair(exists, false)
+        } catch (e: Exception) {
+            logError(e)
+            Pair(false, false)
+        }
+    }
+
+    /**
+     * Simple check for backward compatibility
+     */
     fun hasEpub(activity: Activity?, name: String): Boolean {
         if (activity == null) return false
 
@@ -247,21 +321,15 @@ object BookDownloader2Helper {
             return false
         }
 
-        val relativePath = (Environment.DIRECTORY_DOWNLOADS + "${fs}Epub${fs}")
         val displayName = "${sanitizeFilename(name)}.epub"
 
-        if (isScopedStorage()) {
-            val cr = activity.contentResolver ?: return false
-            val fileUri =
-                cr.getExistingDownloadUriOrNullQ(relativePath, displayName) ?: return false
-            val fileLength = cr.getFileLength(fileUri) ?: return false
-            return fileLength != 0L
-        } else {
-            val normalPath =
-                "${Environment.getExternalStorageDirectory()}${fs}$relativePath$displayName"
-
-            val bookFile = File(normalPath)
-            return bookFile.exists()
+        return try {
+            val subDir = activity.getBasePath().first ?: getDefaultDir(activity) ?: return false
+            val foundFile = subDir.findFile(displayName)
+            foundFile?.exists() == true && (foundFile.length() ?: 0L) > BookDownloader2.LOCAL_EPUB_MIN_SIZE
+        } catch (e: Exception) {
+            logError(e)
+            false
         }
     }
 
@@ -332,93 +400,66 @@ object BookDownloader2Helper {
     ): DownloadProgress? {
         if (context == null) return null
 
-        try {
-            val sApiname = sanitizeFilename(apiName)
-            val sAuthor = if (author == null) "" else sanitizeFilename(author)
-            val sName = sanitizeFilename(name)
-            val id = generateId(apiName, author, name)
+        return try {
+            val info = SanitizedNovelInfo.create(apiName, author, name)
 
-            val epub = File(
-                context.filesDir.toString() + getDirectory(
-                    sApiname,
-                    sAuthor,
-                    sName
-                ), LOCAL_EPUB
+            // Check for local epub first
+            val epubFile = File(
+                context.filesDir.toString() + info.directory,
+                BookDownloader2.LOCAL_EPUB
             )
 
-            val (count, downloaded) =
-                if (epub.exists()) {
-                    val length = epub.length()
-                    if (length > LOCAL_EPUB_MIN_SIZE) {
-                        1 to 1
-                    } else {
-                        0 to 0
-                    }
-                } else {
-                    val existingFiles = File(
-                        context.filesDir.toString() + getDirectory(
-                            sApiname,
-                            sAuthor,
-                            sName
-                        )
-                    ).listFiles()?.mapNotNull { it.nameWithoutExtension.toIntOrNull() }?.sorted()
+            val (count, downloaded) = when {
+                epubFile.exists() && epubFile.length() > BookDownloader2.LOCAL_EPUB_MIN_SIZE -> {
+                    1 to 1
+                }
+                else -> {
+                    val dir = File(context.filesDir.toString() + info.directory)
+                    val existingFiles = dir.listFiles()
+                        ?.mapNotNull { it.nameWithoutExtension.toIntOrNull() }
+                        ?.sorted()
 
                     if (existingFiles.isNullOrEmpty()) {
                         0 to 0
                     } else {
-                        // find first continued subsequence after DOWNLOAD_OFFSET
-                        // and mark downloaded as <= sequence end
-                        val start = getKey<Int>(DOWNLOAD_OFFSET, id.toString()) ?: 0
-                        val startIndex = maxOf(existingFiles.indexOfFirst { x -> x >= start }, 0)
-                        var last = existingFiles[startIndex]
-                        var downloads = startIndex + 1
-                        for (i in startIndex + 1 until existingFiles.size) {
-                            if (existingFiles[i] == last + 1) {
-                                downloads += 1
-                                last = existingFiles[i]
-                            } else {
-                                break
-                            }
-                        }
-
-                        (last + 1) to downloads
+                        calculateDownloadProgress(existingFiles, info.id)
                     }
                 }
+            }
+
             if (count <= 0) return null
 
-            /*var sStart = start
-            if (sStart == -1) { // CACHE DATA
-                sStart = maxOf(getKey(DOWNLOAD_SIZE, id.toString(), 0)!! - 1, 0)
-            }
-
-            var count = sStart
-            for (index in sStart..total) {
-                val filepath =
-                    context.filesDir.toString() + getFilename(
-                        sApiname,
-                        sAuthor,
-                        sName,
-                        index
-                    )
-                val rFile = File(filepath)
-                if (rFile.exists() && rFile.length() > 10) {
-                    count++
-                } else {
-                    break
-                }
-            }
-
-            if (sStart == count && start > 0) {
-                return downloadInfo(context, author, name, total, apiName, maxOf(sStart - 100, 0))
-            }
-            */
-
-            setKey(DOWNLOAD_SIZE, id.toString(), count)
-            val total = getKey<Int>(DOWNLOAD_TOTAL, id.toString()) ?: return null
-            return DownloadProgress(count.toLong(), total.toLong(), downloaded.toLong())
+            setKey(DOWNLOAD_SIZE, info.id.toString(), count)
+            val total = getKey<Int>(DOWNLOAD_TOTAL, info.id.toString()) ?: return null
+            DownloadProgress(count.toLong(), total.toLong(), downloaded.toLong())
         } catch (e: Exception) {
-            return null
+            logError(e)
+            null
         }
+    }
+
+    private fun calculateDownloadProgress(
+        existingFiles: List<Int>,
+        id: Int
+    ): Pair<Int, Int> {
+        val start = getKey<Int>(DOWNLOAD_OFFSET, id.toString()) ?: 0
+        val startIndex = maxOf(existingFiles.indexOfFirst { it >= start }, 0)
+
+        if (startIndex >= existingFiles.size) return 0 to 0
+
+        var last = existingFiles[startIndex]
+        var downloads = 1
+
+        for (i in startIndex + 1 until existingFiles.size) {
+            if (existingFiles[i] == last + 1) {
+                downloads++
+                last = existingFiles[i]
+            } else {
+                break
+            }
+        }
+
+        return (last + 1) to downloads
     }
 
     fun openQuickStream(activity: Activity?, uri: Uri?) {
@@ -614,7 +655,7 @@ object BookDownloader2Helper {
                     }
                     return@withContext true
                 } else {
-                    delay(5000) // ERROR
+                    delay(BookDownloader2.DOWNLOAD_RETRY_DELAY_MS) // ERROR
                     if (api.rateLimitTime > 0) {
                         delay(api.rateLimitTime)
                     }
@@ -643,158 +684,147 @@ object BookDownloader2Helper {
             return
         }
 
-        try {
-            val sApiName = sanitizeFilename(apiName)
-            val sAuthor = if (author == null) "" else sanitizeFilename(author)
-            val sName = sanitizeFilename(name)
-            val id = "$sApiName$sAuthor$sName".hashCode()
+        val info = SanitizedNovelInfo.create(apiName, author, name)
 
+        try {
             val subDir = activity.getBasePath().first ?: getDefaultDir(activity)
             ?: throw IOException("No file")
 
-            //val subDir = baseFile.gotoDirectoryOrThrow("Epub", createMissingDirectories = true)
             val displayName = "${sanitizeFilename(name)}.epub"
 
-            //val relativePath = (Environment.DIRECTORY_DOWNLOADS + "${fs}Epub${fs}")
-            subDir.findFile(displayName)?.delete()
-            val file = subDir.createFileOrThrow(displayName)
-
-            val fileStream =
-                file.openOutputStream(append = false) ?: throw IOException("No outputfile")
-
-            /*if (isScopedStorage()) {
-                val cr = activity.contentResolver ?: return false
-
-                val currentExistingFile =
-                    cr.getExistingDownloadUriOrNullQ(
-                        relativePath,
-                        displayName
-                    ) // CURRENT FILE WITH THE SAME PATH
-
-                if (currentExistingFile != null) { // DELETE FILE IF FILE EXITS AND NOT RESUME
-                    val rowsDeleted =
-                        activity.contentResolver.delete(currentExistingFile, null, null)
-                    if (rowsDeleted < 1) {
-                        println("ERROR DELETING FILE!!!")
-                    }
-                }
-
-                val contentUri =
-                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) // USE INSTEAD OF MediaStore.Downloads.EXTERNAL_CONTENT_URI
-
-                val newFile = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
-                    put(MediaStore.MediaColumns.TITLE, name)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "application/epub+zip")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-                }
-
-                val newFileUri = cr.insert(
-                    contentUri,
-                    newFile
-                ) ?: return false
-
-                fileStream = cr.openOutputStream(newFileUri, "w")
-                    ?: return false
-            } else {
-                val normalPath =
-                    "${Environment.getExternalStorageDirectory()}${fs}$relativePath$displayName"
-
-                // NORMAL NON SCOPED STORAGE FILE CREATION
-                val rFile = File(normalPath)
-                if (!rFile.exists()) {
-                    rFile.parentFile?.mkdirs()
-                    if (!rFile.createNewFile()) return false
-                } else {
-                    rFile.parentFile?.mkdirs()
-                    if (!rFile.delete()) return false
-                    if (!rFile.createNewFile()) return false
-                }
-                fileStream = FileOutputStream(rFile, false)
-            }*/
-
-            val epubFile = File(
-                activity.filesDir.toString() + getDirectory(sApiName, sAuthor, sName),
-                LOCAL_EPUB
+            // Check if we actually need to generate
+            val existingFile = subDir.findFile(displayName)
+            val internalEpub = File(
+                activity.filesDir.toString() + info.directory,
+                BookDownloader2.LOCAL_EPUB
             )
-            if (epubFile.exists() && epubFile.length() > LOCAL_EPUB_MIN_SIZE) {
-                fileStream.write(epubFile.readBytes())
 
-                setKey(DOWNLOAD_EPUB_SIZE, id.toString(), 1)
-            } else {
+            // If external EPUB exists, check if we need to regenerate
+            if (existingFile?.exists() == true) {
+                val existingSize = existingFile.length() ?: 0L
+                if (existingSize > BookDownloader2.LOCAL_EPUB_MIN_SIZE) {
+                    // Check if internal epub exists (for direct downloads)
+                    if (internalEpub.exists() && internalEpub.length() > BookDownloader2.LOCAL_EPUB_MIN_SIZE) {
+                        val internalModified = internalEpub.lastModified()
+                        val externalModified = try {
+                            getKey<Long>("epub_generated_${info.id}") ?: 0L
+                        } catch (e: Exception) { 0L }
 
-                val book = EpubBook()
-                val metadata = book.metadata
-                if (author != null) {
-                    metadata.addAuthor(Author(author))
-                }
+                        if (internalModified <= externalModified) {
+                            return // Already up to date
+                        }
+                    } else {
+                        // Check chapter count
+                        val currentEpubSize = getKey<Int>(DOWNLOAD_EPUB_SIZE, info.id.toString()) ?: 0
+                        val downloadedSize = getKey<Int>(DOWNLOAD_SIZE, info.id.toString()) ?: 0
 
-                if (synopsis != null) {
-                    metadata.addDescription(synopsis)
-                }
-
-                metadata.addTitle(name)
-
-                val posterFilepath =
-                    activity.filesDir.toString() + getFilenameIMG(sApiName, sAuthor, sName)
-                val pFile = File(posterFilepath)
-                if (pFile.exists()) {
-                    book.coverImage = Resource(pFile.readBytes(), MediaType("cover", ".jpg"))
-                }
-
-                val stripHtml = activity.getStripHtml()
-                val head = activity.filesDir.toString()
-                val dir = File(head + getDirectory(sApiName, sAuthor, sName))
-                // do not include chapters that are stream read downloaded in partial chapter generation
-                val start = getKey<Int>(DOWNLOAD_OFFSET, id.toString()) ?: 0
-                val chapters = dir.listFiles()?.toList()?.mapNotNull { fileName ->
-                    fileName.nameWithoutExtension.toIntOrNull() ?: return@mapNotNull null
-                }?.filter { x -> x >= start }?.sorted()
-
-                chapters?.pmap { threadIndex ->
-
-                    val filepath =
-                        head + getFilename(
-                            sApiName,
-                            sAuthor,
-                            sName,
-                            threadIndex
-                        )
-                    val chap = getChapter(filepath, threadIndex, stripHtml) ?: return@pmap null
-                    Triple(
-                        Resource(
-                            "id$threadIndex",
-                            chap.html.toByteArray(),
-                            "chapter$threadIndex.html",
-                            MediaTypes.XHTML
-                        ),
-                        threadIndex,
-                        chap.title
-                    )
-                }?.sortedBy {
-                    it?.second
-                }?.also { list ->
-                    if (list.isEmpty()) {
-                        throw ErrorLoadingException("Unable to create an empty book")
+                        if (currentEpubSize >= downloadedSize && downloadedSize > 0) {
+                            return // Already up to date
+                        }
                     }
-                }?.forEach { chapter ->
-                    if (chapter == null) {
-                        return@forEach
-                    }
-                    book.addSection(chapter.third, chapter.first)
                 }
-
-                val largestChapter = chapters?.maxOrNull()?.plus(1) ?: 0
-
-                val epubWriter = EpubWriter()
-                epubWriter.write(book, fileStream)
-                setKey(DOWNLOAD_EPUB_SIZE, id.toString(), largestChapter)
             }
-            fileStream.close()
+
+            // Delete old file if exists
+            existingFile?.delete()
+
+            val file = subDir.createFileOrThrow(displayName)
+            val fileStream = file.openOutputStream(append = false)
+                ?: throw IOException("No output file")
+
+            try {
+                // Check if we have a pre-downloaded EPUB
+                if (internalEpub.exists() && internalEpub.length() > BookDownloader2.LOCAL_EPUB_MIN_SIZE) {
+                    fileStream.write(internalEpub.readBytes())
+                    setKey(DOWNLOAD_EPUB_SIZE, info.id.toString(), 1)
+                    setKey("epub_generated_${info.id}", System.currentTimeMillis())
+                } else {
+                    // Generate from chapters
+                    generateEpubFromChapters(
+                        activity, info, author, name, synopsis, fileStream
+                    )
+                }
+            } finally {
+                fileStream.close()
+            }
         } catch (e: Exception) {
             logError(e)
             throw e
         }
+    }
+
+    @WorkerThread
+    private fun generateEpubFromChapters(
+        activity: Activity,
+        info: SanitizedNovelInfo,
+        author: String?,
+        name: String,
+        synopsis: String?,
+        fileStream: java.io.OutputStream
+    ) {
+        val book = EpubBook()
+        val metadata = book.metadata
+
+        author?.let { metadata.addAuthor(Author(it)) }
+        synopsis?.let { metadata.addDescription(it) }
+        metadata.addTitle(name)
+
+        // Add cover image
+        val posterFilepath = activity.filesDir.toString() +
+                getFilenameIMG(info.apiName, info.author, info.name)
+        val pFile = File(posterFilepath)
+        if (pFile.exists()) {
+            book.coverImage = Resource(pFile.readBytes(), MediaType("cover", ".jpg"))
+        }
+
+        val stripHtml = activity.getStripHtml()
+        val head = activity.filesDir.toString()
+        val dir = File(head + info.directory)
+
+        // Get starting offset for partial downloads
+        val start = getKey<Int>(DOWNLOAD_OFFSET, info.id.toString()) ?: 0
+
+        val chapters = dir.listFiles()?.toList()?.mapNotNull { file ->
+            file.nameWithoutExtension.toIntOrNull()?.takeIf { it >= start }
+        }?.sorted()
+
+        if (chapters.isNullOrEmpty()) {
+            throw ErrorLoadingException("Unable to create an empty book")
+        }
+
+        val chapterResources = chapters.mapNotNull { threadIndex ->
+            val filepath = head + getFilename(
+                info.apiName,
+                info.author,
+                info.name,
+                threadIndex
+            )
+            val chap = getChapter(filepath, threadIndex, stripHtml) ?: return@mapNotNull null
+            Triple(
+                Resource(
+                    "id$threadIndex",
+                    chap.html.toByteArray(),
+                    "chapter$threadIndex.html",
+                    MediaTypes.XHTML
+                ),
+                threadIndex,
+                chap.title
+            )
+        }.sortedBy { it.second }
+
+        if (chapterResources.isEmpty()) {
+            throw ErrorLoadingException("Unable to create an empty book")
+        }
+
+        chapterResources.forEach { (resource, _, title) ->
+            book.addSection(title, resource)
+        }
+
+        val largestChapter = chapters.maxOrNull()?.plus(1) ?: 0
+
+        EpubWriter().write(book, fileStream)
+        setKey(DOWNLOAD_EPUB_SIZE, info.id.toString(), largestChapter)
+        setKey("epub_generated_${info.id}", System.currentTimeMillis())
     }
 }
 
@@ -979,7 +1009,7 @@ object NotificationHelper {
 
                     val pending: PendingIntent =
                         PendingIntent.getService(
-                            context, 4337 + index + id,
+                            context, BookDownloader2.NOTIFICATION_BASE_ID + index + id,
                             resultIntent,
                             PendingIntent.FLAG_UPDATE_CURRENT or
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
@@ -1021,19 +1051,29 @@ object NotificationHelper {
 
 object ImageDownloader {
     private val cachedBitmapMutex = Mutex()
-    private val cachedBitmaps = hashMapOf<String, Bitmap>()
 
-    suspend fun Context.getImageBitmapFromUrl(url: String, headers: Map<String, String>? = null): Bitmap? {
+    // LRU cache with max 50 entries to prevent memory leaks
+    private val cachedBitmaps = object : LinkedHashMap<String, Bitmap>(50, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
+            return size > MAX_CACHED_BITMAPS
+        }
+    }
+
+    private const val MAX_CACHED_BITMAPS = 50
+
+    suspend fun Context.getImageBitmapFromUrl(
+        url: String,
+        headers: Map<String, String>? = null
+    ): Bitmap? = withContext(Dispatchers.IO) {
         try {
-            with(cachedBitmapMutex) {
-                if (cachedBitmaps.containsKey(url)) {
-                    return cachedBitmaps[url]
-                }
+            // Thread-safe cache check
+            cachedBitmapMutex.withLock {
+                cachedBitmaps[url]?.let { return@withContext it }
             }
 
-            val imageLoader = SingletonImageLoader.get(this)
+            val imageLoader = SingletonImageLoader.get(this@getImageBitmapFromUrl)
 
-            val request = ImageRequest.Builder(this)
+            val request = ImageRequest.Builder(this@getImageBitmapFromUrl)
                 .data(url)
                 .apply {
                     headers?.forEach { (key, value) ->
@@ -1042,27 +1082,43 @@ object ImageDownloader {
                 }
                 .build()
 
-            val bitmap = runBlocking {
-                val result = imageLoader.execute(request)
-                (result as? SuccessResult)?.image?.asDrawable(applicationContext.resources)
-                    ?.toBitmap()
-            }
+            val result = imageLoader.execute(request)
+            val bitmap = (result as? SuccessResult)?.image
+                ?.asDrawable(applicationContext.resources)
+                ?.toBitmap()
 
+            // Thread-safe cache update
             bitmap?.let {
-                with(cachedBitmapMutex) {
+                cachedBitmapMutex.withLock {
                     cachedBitmaps[url] = it
                 }
             }
 
-            return bitmap
+            bitmap
         } catch (e: Exception) {
             logError(e)
-            return null
+            null
+        }
+    }
+
+    /**
+     * Clear the bitmap cache to free memory
+     */
+    suspend fun clearCache() {
+        cachedBitmapMutex.withLock {
+            cachedBitmaps.clear()
         }
     }
 }
 
 object BookDownloader2 {
+
+    internal const val NOTIFICATION_BASE_ID = 4337
+    internal const val DOWNLOAD_RETRY_DELAY_MS = 5000L
+    internal const val RATE_LIMIT_EXTRA_DELAY_MS = 1000L
+    internal const val MIN_VALID_CHAPTER_SIZE = 10L
+    internal const val NOTIFICATION_UPDATE_INTERVAL_MS = 1000L
+    internal const val PAUSE_CHECK_INTERVAL_MS = 200L
     fun openQuickStream(uri: Uri?) = main {
         BookDownloader2Helper.openQuickStream(activity, uri)
     }
@@ -1180,25 +1236,47 @@ object BookDownloader2 {
     ) {
         if (readEpubMutex.isLocked) return
         readEpubMutex.withLock {
-            val downloaded = getKey(DOWNLOAD_EPUB_SIZE, id.toString(), 0)!!
-            val fileExists = hasEpub(name)
+            try {
+                val downloaded = getKey(DOWNLOAD_EPUB_SIZE, id.toString(), 0) ?: 0
 
-            // FIX: If the EPUB file exists but the app has lost track of the size (key == 0),
-            // assume the file is up-to-date enough to read. Update the key to prevent
-            // future checks from triggering a regeneration, and open the file.
-            if (fileExists && downloaded == 0) {
-                setKey(DOWNLOAD_EPUB_SIZE, id.toString(), downloadedCount)
-                readEpub(author, name, apiName, synopsis)
-                return
-            }
+                // Check both internal and external storage
+                val (fileExists, isInternalEpub) = BookDownloader2Helper.hasEpubDetailed(
+                    activity, author, name, apiName
+                )
 
-            // Only regenerate if the file is missing OR the chapter counts don't match
-            val shouldUpdate = !fileExists || (downloadedCount - downloaded != 0)
+                when {
+                    // Case 1: Internal EPUB exists (directly downloaded epub file)
+                    isInternalEpub -> {
+                        // For internal EPUBs, we need to export to external storage first
+                        // or open directly if the reader supports it
+                        if (!hasEpub(name)) {
+                            // Export internal EPUB to external storage
+                            generateAndReadEpub(author, name, apiName, synopsis)
+                        } else {
+                            readEpub(author, name, apiName, synopsis)
+                        }
+                    }
 
-            if (shouldUpdate) {
-                generateAndReadEpub(author, name, apiName, synopsis)
-            } else {
-                readEpub(author, name, apiName, synopsis)
+                    // Case 2: External EPUB exists and is up to date
+                    fileExists && downloadedCount <= downloaded -> {
+                        readEpub(author, name, apiName, synopsis)
+                    }
+
+                    // Case 3: External EPUB exists but tracking was lost (downloaded == 0)
+                    fileExists && downloaded == 0 -> {
+                        // Restore the tracking key and open
+                        setKey(DOWNLOAD_EPUB_SIZE, id.toString(), downloadedCount)
+                        readEpub(author, name, apiName, synopsis)
+                    }
+
+                    // Case 4: EPUB doesn't exist or needs update
+                    else -> {
+                        generateAndReadEpub(author, name, apiName, synopsis)
+                    }
+                }
+            } catch (t: Throwable) {
+                logError(t)
+                showToast(R.string.error_loading_novel)
             }
         }
     }
@@ -1773,7 +1851,7 @@ object BookDownloader2 {
                         if (currentState != DownloadState.IsPaused) {
                             break
                         }
-                        delay(200)
+                        delay(PAUSE_CHECK_INTERVAL_MS)
                     }
 
                     if (currentState == DownloadState.IsStopped) {
@@ -1785,14 +1863,14 @@ object BookDownloader2 {
                 val stream = try {
                     link.get().body
                 } catch (e: Exception) {
-                    delay(api.rateLimitTime + 1000)
+                    delay(api.rateLimitTime + RATE_LIMIT_EXTRA_DELAY_MS)
                     continue
                 }
 
                 val length = stream.contentLength()
 
                 if (length <= LOCAL_EPUB_MIN_SIZE) {
-                    delay(api.rateLimitTime + 1000)
+                    delay(api.rateLimitTime + RATE_LIMIT_EXTRA_DELAY_MS)
                     continue
                 }
 
@@ -1843,7 +1921,7 @@ object BookDownloader2 {
                                 if (currentState != DownloadState.IsPaused) {
                                     break
                                 }
-                                delay(200)
+                                delay(PAUSE_CHECK_INTERVAL_MS)
                             }
 
                             if (currentState == DownloadState.IsStopped) {
@@ -1852,7 +1930,7 @@ object BookDownloader2 {
                         }
 
                         // don't spam notifications so only update once per sec
-                        if (lastUpdatedMs + 1000 < System.currentTimeMillis()) {
+                        if (lastUpdatedMs + NOTIFICATION_UPDATE_INTERVAL_MS < System.currentTimeMillis()) {
                             lastUpdatedMs = System.currentTimeMillis()
                             createNotification(
                                 id,
@@ -2002,7 +2080,7 @@ object BookDownloader2 {
                     if (currentState != DownloadState.IsPaused) {
                         break
                     }
-                    delay(200)
+                    delay(PAUSE_CHECK_INTERVAL_MS)
                 }
 
                 val filepath =
@@ -2014,7 +2092,7 @@ object BookDownloader2 {
                     )
                 val rFile = File(filepath)
                 if (rFile.exists()) {
-                    if (rFile.length() > 10) { // TO PREVENT INVALID FILE FROM HAVING TO REMOVE EVERYTHING
+                    if (rFile.length() > MIN_VALID_CHAPTER_SIZE) { // TO PREVENT INVALID FILE FROM HAVING TO REMOVE EVERYTHING
                         continue
                     }
                 }

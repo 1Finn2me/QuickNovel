@@ -32,6 +32,7 @@ import com.lagradost.quicknovel.providers.RoyalRoadProvider
 import com.lagradost.quicknovel.providers.SakuraNovelProvider
 import com.lagradost.quicknovel.providers.ScribblehubProvider
 import com.lagradost.quicknovel.providers.WebNovelProvider
+import com.lagradost.quicknovel.providers.WuxiaWorldProvider
 import com.lagradost.quicknovel.providers.WtrLabProvider
 import com.lagradost.quicknovel.util.Coroutines.ioSafe
 
@@ -79,7 +80,8 @@ class Apis {
             // WattpadProvider(), // they have randomized the css classes
             WtrLabProvider(),
             PawReadProver(),
-            WebNovelProvider()  // <-- ADD THIS LINE
+            WebNovelProvider(),
+            WuxiaWorldProvider()// <-- ADD THIS LINE
         ).sortedBy { it.name }
         fun getApiFromName(name: String): APIRepository {
             return getApiFromNameOrNull(name) ?: APIRepository(apis[1])
