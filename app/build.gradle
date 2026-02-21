@@ -85,8 +85,8 @@ dependencies {
     implementation "me.xdrop:fuzzywuzzy:1.4.0"
 
     //implementation('com.positiondev.epublib:epublib-core:3.1') {
-        //exclude group: 'org.slf4j'
-        //exclude group: 'xmlpull'
+    //exclude group: 'org.slf4j'
+    //exclude group: 'xmlpull'
     //}
     implementation 'org.slf4j:slf4j-android:1.7.36'
 
