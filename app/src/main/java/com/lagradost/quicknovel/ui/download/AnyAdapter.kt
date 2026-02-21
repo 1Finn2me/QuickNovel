@@ -68,9 +68,6 @@ class AnyAdapter(
         }
     }
 
-
-
-
     override fun onCreateFooter(parent: ViewGroup): ViewHolderState<Any> {
         val compact = parent.context.getDownloadIsCompact()
 
@@ -179,8 +176,7 @@ class AnyAdapter(
                 view.apply {
                     imageText.text = card.name
                     historyExtraText.text =
-                        "${card.lastChapterRead}/${card.currentTotalChapters} ${root.context.getString(R.string.read_action_chapters)}"
-
+                        "${card.totalChapters} ${root.context.getString(R.string.read_action_chapters)}"
                     imageView.setImage(card.poster)
 
                     historyPlay.setOnClickListener {
@@ -266,11 +262,8 @@ class AnyAdapter(
                             imageView.setImage(
                                 item.image,
                             ) // skipCache = false
-
                             imageText.text = item.name
                             imageTextMore.isVisible = false
-
-                            progressReading.text = "${item.lastChapterRead}/${item.currentTotalChapters}"
                         }
                     }
 
