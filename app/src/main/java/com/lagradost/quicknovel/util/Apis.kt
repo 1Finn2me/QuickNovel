@@ -23,6 +23,7 @@ import com.lagradost.quicknovel.providers.MoreNovelProvider
 import com.lagradost.quicknovel.providers.MtlNovelProvider
 import com.lagradost.quicknovel.providers.NovLoveProvider
 import com.lagradost.quicknovel.providers.NovelBinProvider
+import com.lagradost.quicknovel.providers.NovelFireProvider
 import com.lagradost.quicknovel.providers.NovelFullNETProvider
 import com.lagradost.quicknovel.providers.NovelFullProvider
 import com.lagradost.quicknovel.providers.NovelsOnlineProvider
@@ -46,6 +47,7 @@ class Apis {
             //BestLightNovelProvider(), //dont exist anymore
             //WuxiaWorldOnlineProvider(), // Site does not work
             RoyalRoadProvider(),
+            NovelFireProvider(),
             NovelFullNETProvider(),
             HiraethTranslationProvider(),
             LibReadProvider(),
@@ -82,7 +84,7 @@ class Apis {
             WtrLabProvider(),
             PawReadProver(),
             WebNovelProvider(),
-            WuxiaWorldProvider()// <-- ADD THIS LINE
+            WuxiaWorldProvider()
         ).sortedBy { it.name }
         fun getApiFromName(name: String): APIRepository {
             return getApiFromNameOrNull(name) ?: APIRepository(apis[1])

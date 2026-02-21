@@ -1,35 +1,12 @@
 package com.lagradost.quicknovel.providers
 
-import android.graphics.ColorSpace.match
 import android.util.Base64
 import android.util.Log
-import android.webkit.CookieManager
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
-import com.lagradost.nicehttp.NiceResponse
-import com.lagradost.nicehttp.Requests
-import com.lagradost.nicehttp.ResponseParser
-import com.lagradost.nicehttp.ignoreAllSSLErrors
-import com.lagradost.quicknovel.ChapterData
-import com.lagradost.quicknovel.ErrorLoadingException
-import com.lagradost.quicknovel.HeadMainPageResponse
-import com.lagradost.quicknovel.LoadResponse
-import com.lagradost.quicknovel.MainAPI
+import com.lagradost.quicknovel.*
 import com.lagradost.quicknovel.MainActivity.Companion.app
-import com.lagradost.quicknovel.R
-import com.lagradost.quicknovel.SearchResponse
-import com.lagradost.quicknovel.fixUrlNull
-import com.lagradost.quicknovel.newChapterData
-import com.lagradost.quicknovel.newSearchResponse
-import com.lagradost.quicknovel.newStreamResponse
-import com.lagradost.quicknovel.setStatus
-import com.lagradost.quicknovel.toRate
 import com.lagradost.quicknovel.util.AppUtils.parseJson
-import android.util.Logimport javax.crypto.Cipher
+import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
@@ -178,7 +155,7 @@ class WtrLabProvider : MainAPI() {
 
             val name = titleHolder.text() ?: return@mapNotNull null
             newSearchResponse(name, href) {
-                posterUrl = fixUrlNull(select.selectFirst("a img")?.attr("src"))
+                posterUrl = fixUrlNull(element.selectFirst("a img")?.attr("src"))
             }
         }
     }
@@ -189,11 +166,11 @@ class WtrLabProvider : MainAPI() {
         start: Long,
         end: Long
     ): List<ChapterData> {
-        val chapterDataUrl =
-            "$mainUrl/api/chapters/${chaptersJson.props.pageProps.serie.serieData.rawId}?start=$start&end=$end"
-        val chaptersDataJson =
-            app.get(chapterDataUrl).text
-        val chaptersData = parseJson<ResultChaptersJsonResponse.Root>(chaptersDataJson)
+        return try {
+            val chapterDataUrl =
+                "$mainUrl/api/chapters/$rawId?start=$start&end=$end"
+            val chaptersDataJson = app.get(chapterDataUrl).text
+            val chaptersData = parseJson<ResultChaptersJsonResponse.Root>(chaptersDataJson)
 
             chaptersData.chapters.map { chapter ->
                 // Build chapter URL - use the novel URL + /chapter-{order}
@@ -230,6 +207,8 @@ class WtrLabProvider : MainAPI() {
         val json = jsonNode?.data() ?: throw ErrorLoadingException("no chapters")
         val chaptersJson = parseJson<ResultJsonResponse.Root>(json)
 
+        val serieData = chaptersJson.props.pageProps.serie.serieData
+        val totalChapters = serieData.rawChapterCount
 
         val chapters = mutableListOf<ChapterData>()
 
@@ -287,13 +266,11 @@ class WtrLabProvider : MainAPI() {
             .filter { it.isNotBlank() }
 
         return newStreamResponse(title, url, chapters) {
-            synopsis = doc.selectFirst(".desc-wrap")?.text()
-            posterUrl = fixUrlNull(doc.selectFirst(".image-wrap > img")?.attr("src"))
-            views =
-                doc.select(".detail-line").find { it.text().contains("Views") }?.text()?.split(" ")
-                    ?.getOrNull(0)?.toIntOrNull()
-            // author = doc.select(".author-wrap>a").text()
-            rating = doc.selectFirst(".rating-text")?.text()?.toRate(5)
+            this.synopsis = synopsis
+            this.posterUrl = posterUrl
+            this.views = views
+            this.author = author
+            this.rating = rating
         }
     }
 
@@ -314,7 +291,7 @@ class WtrLabProvider : MainAPI() {
                 "raw_id" to chapter.serieData.rawId.toString(),
                 "retry" to "false",
                 "translate" to "web", // translate=ai just returns a job and I am too lazy to fix that
-                )
+            )
         ).parsed<LoadJsonResponse2.Root>()
         val paragraphs = decryptContent(root.data.data.body)
 
@@ -324,16 +301,10 @@ class WtrLabProvider : MainAPI() {
             text.append("</p>")
         }
 
-        /*for (select in doc.select(".chapter-body>p")) {
-            if (select.ownText().contains("window._taboola")) {
-                select.remove()
-            }
-        }*/
-
-        return text.toString()//doc.selectFirst(".chapter-body")?.html()
+        return text.toString()
     }
 
-    fun decryptContent(encryptedText: String): List<String> {
+    private fun decryptContent(encryptedText: String): List<String> {
         if (encryptedText.isEmpty()) return emptyList()
 
         var isArray = false
@@ -374,10 +345,9 @@ class WtrLabProvider : MainAPI() {
             listOf(decryptedText)
         }
     }
-
-
 }
 
+// Data classes remain the same...
 object ResultChaptersJsonResponse {
     data class Root(
         val chapters: List<Chapter>,
