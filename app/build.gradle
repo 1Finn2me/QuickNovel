@@ -22,7 +22,7 @@ android {
         minSdkVersion 21
         targetSdkVersion 35
         versionCode 56
-        versionName "3.4.3"
+        versionName "3.4.4"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -41,9 +41,9 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
-
-    buildFeatures.buildConfig true
-
+    buildFeatures {
+        buildConfig = true
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_9
         targetCompatibility JavaVersion.VERSION_1_9
@@ -51,6 +51,7 @@ android {
 
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_1_9.toString()
+        freeCompilerArgs = ['-XXLanguage:+PropertyParamAnnotationDefaultTargetMode']
     }
     namespace 'com.lagradost.quicknovel'
 }

@@ -11,13 +11,14 @@ import com.lagradost.quicknovel.SearchResponse
 import com.lagradost.quicknovel.StreamResponse
 import com.lagradost.quicknovel.providers.AllNovelProvider
 import com.lagradost.quicknovel.providers.AnnasArchive
-import com.lagradost.quicknovel.providers.BestLightNovelProvider
+import com.lagradost.quicknovel.providers.FanMtlnProvider
 import com.lagradost.quicknovel.providers.FreewebnovelProvider
 import com.lagradost.quicknovel.providers.GraycityProvider
 import com.lagradost.quicknovel.providers.HiraethTranslationProvider
 import com.lagradost.quicknovel.providers.IndoWebNovelProvider
 import com.lagradost.quicknovel.providers.KolNovelProvider
 import com.lagradost.quicknovel.providers.LibReadProvider
+import com.lagradost.quicknovel.providers.LightNovelTranslationsProvider
 import com.lagradost.quicknovel.providers.MeioNovelProvider
 import com.lagradost.quicknovel.providers.MoreNovelProvider
 import com.lagradost.quicknovel.providers.MtlNovelProvider
@@ -29,6 +30,7 @@ import com.lagradost.quicknovel.providers.NovelFullProvider
 import com.lagradost.quicknovel.providers.NovelsOnlineProvider
 import com.lagradost.quicknovel.providers.PawReadProver
 import com.lagradost.quicknovel.providers.ReadNovelFullProvider
+import com.lagradost.quicknovel.providers.ReadOnlineFreeBookProvider
 import com.lagradost.quicknovel.providers.ReadfromnetProvider
 import com.lagradost.quicknovel.providers.RedditProvider
 import com.lagradost.quicknovel.providers.RoyalRoadProvider
@@ -37,55 +39,58 @@ import com.lagradost.quicknovel.providers.ScribblehubProvider
 import com.lagradost.quicknovel.providers.WebNovelProvider
 import com.lagradost.quicknovel.providers.WuxiaWorldProvider
 import com.lagradost.quicknovel.providers.WtrLabProvider
+import com.lagradost.quicknovel.providers.WuxiaBoxProvider
 import com.lagradost.quicknovel.util.Coroutines.ioSafe
 
 class Apis {
     companion object {
         val apis: List<MainAPI> = arrayOf(
             //AllProvider(),
-            //NovelPassionProvider(), // Site gone
-            //BestLightNovelProvider(), //dont exist anymore
-            //WuxiaWorldOnlineProvider(), // Site does not work
-            RoyalRoadProvider(),
-            NovelFireProvider(),
-            NovelFullNETProvider(),
-            HiraethTranslationProvider(),
-            LibReadProvider(),
-            FreewebnovelProvider(),
-            //AzynovelProvider(), // dont exist anymore
-            ReadfromnetProvider(),
             AllNovelProvider(),
-            //RanobesProvider(), // custom capcha
-            NovelFullProvider(),
-            NovelBinProvider(),
-            //MNovelFreeProvider(), // same as NovelFullVipProvider
-            //EngNovelProvider(),
-            NovelsOnlineProvider(),
-            //EfremnetProvider(), // domain is expired
-            GraycityProvider(),
-            MtlNovelProvider(),
             AnnasArchive(),
-            // chapter captcha
-            // WuxiaWorldSiteProvider(),
-            //ReadLightNovelProvider(), // NOT WORKING?
-            NovLoveProvider(),
-            // ComrademaoProvider(), // domain sold/down?
-            // LightNovelPubProvider(), // Got cloudflare, but probably bypassable
-            ReadNovelFullProvider(),
-            ScribblehubProvider(),
-            KolNovelProvider(),
-            //RewayatArProvider(), // removed url
-            //ReadAnyBookProvider(), // Books locked behind login
-            MeioNovelProvider(),
-            MoreNovelProvider(), // cloudflare?
+            //AzynovelProvider(), // dont exist anymore
+            //BestLightNovelProvider(), //dont exist anymore
+            //ComrademaoProvider(), // domain sold/down?
+            //EfremnetProvider(), // domain is expired
+            //EngNovelProvider(),
+            FreewebnovelProvider(),
+            FanMtlnProvider(),
+            GraycityProvider(),
+            HiraethTranslationProvider(),
             IndoWebNovelProvider(),
-            SakuraNovelProvider(), // cloudflare?
-            // WattpadProvider(), // they have randomized the css classes
-            WtrLabProvider(),
+            KolNovelProvider(),
+            LibReadProvider(),
+            //LightNovelPubProvider(), // Got cloudflare, but probably bypassable
+            LightNovelTranslationsProvider(),
+            MeioNovelProvider(),
+            //MNovelFreeProvider(), // same as NovelFullVipProvider
+            MoreNovelProvider(), // cloudflare?
+            MtlNovelProvider(),
+            NovelBinProvider(),
+            NovelFullNETProvider(),
+            NovelFullProvider(),
+            NovelFireProvider(),
+            //NovelPassionProvider(), // Site gone
+            NovelsOnlineProvider(),
+            NovLoveProvider(),
             PawReadProver(),
-            WebNovelProvider(),
-            WuxiaWorldProvider()
+            //RanobesProvider(), // custom capcha
+            //ReadAnyBookProvider(), // Books locked behind login
+            ReadfromnetProvider(),
+            //ReadLightNovelProvider(), // NOT WORKING?
+            ReadNovelFullProvider(),
+            //RewayatArProvider(), // removed url
+            RoyalRoadProvider(),
+            ReadOnlineFreeBookProvider(),
+            SakuraNovelProvider(), // cloudflare?
+            ScribblehubProvider(),
+            //WuxiaWorldOnlineProvider(), // Site does not work
+            //WuxiaWorldSiteProvider(),
+            //WattpadProvider(), // they have randomized the css classes
+            WtrLabProvider(),
+            WuxiaBoxProvider(),
         ).sortedBy { it.name }
+
         fun getApiFromName(name: String): APIRepository {
             return getApiFromNameOrNull(name) ?: APIRepository(apis[1])
         }

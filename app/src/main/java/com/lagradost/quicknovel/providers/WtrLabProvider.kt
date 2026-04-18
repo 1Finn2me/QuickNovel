@@ -1,298 +1,141 @@
 package com.lagradost.quicknovel.providers
 
 import android.util.Base64
-import android.util.Log
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.quicknovel.*
+import com.lagradost.quicknovel.ChapterData
+import com.lagradost.quicknovel.ErrorLoadingException
+import com.lagradost.quicknovel.LoadResponse
+import com.lagradost.quicknovel.MainAPI
 import com.lagradost.quicknovel.MainActivity.Companion.app
+import com.lagradost.quicknovel.MainActivity.Companion.appWithInterceptor
+import com.lagradost.quicknovel.SearchResponse
+import com.lagradost.quicknovel.fixUrlNull
+import com.lagradost.quicknovel.newChapterData
+import com.lagradost.quicknovel.newSearchResponse
+import com.lagradost.quicknovel.newStreamResponse
+import com.lagradost.quicknovel.setStatus
 import com.lagradost.quicknovel.util.AppUtils.parseJson
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import kotlin.math.roundToInt
 
 
 class WtrLabProvider : MainAPI() {
-    override val name = "WTR-LAB"
-    override val mainUrl = "https://wtr-lab.com"
+    override val hasMainPage = false
     override val lang = "en"
-    override val hasMainPage = true
     override val hasReviews = false
-    override val usesCloudFlareKiller = false
+    override val mainUrl = "https://wtr-lab.com"
+    override val name = "WTR-LAB"
+    override val usesCloudFlareKiller = true
 
-    override val iconId = R.drawable.icon_wtrlab
-
-    companion object {
-        private const val TAG = "WtrLabProvider"
-        private const val CHAPTERS_PER_REQUEST = 500L
-    }
-
-    override val tags = listOf(
-        Pair("All", ""),
-        Pair("Action", "action"),
-        Pair("Adventure", "adventure"),
-        Pair("Comedy", "comedy"),
-        Pair("Drama", "drama"),
-        Pair("Fantasy", "fantasy"),
-        Pair("Harem", "harem"),
-        Pair("Historical", "historical"),
-        Pair("Horror", "horror"),
-        Pair("Martial Arts", "martial-arts"),
-        Pair("Mature", "mature"),
-        Pair("Mecha", "mecha"),
-        Pair("Mystery", "mystery"),
-        Pair("Psychological", "psychological"),
-        Pair("Romance", "romance"),
-        Pair("School Life", "school-life"),
-        Pair("Sci-fi", "sci-fi"),
-        Pair("Seinen", "seinen"),
-        Pair("Shoujo", "shoujo"),
-        Pair("Shounen", "shounen"),
-        Pair("Slice of Life", "slice-of-life"),
-        Pair("Supernatural", "supernatural"),
-        Pair("Tragedy", "tragedy"),
-        Pair("Wuxia", "wuxia"),
-        Pair("Xianxia", "xianxia"),
-        Pair("Xuanhuan", "xuanhuan"),
-    )
-
-    override val orderBys = listOf(
-        Pair("Popular", "popular"),
-        Pair("Latest", "latest"),
-        Pair("Rating", "rating"),
-        Pair("Views", "views"),
-        Pair("New", "new"),
-    )
-
-    /**
-     * Fix image URL - handle relative paths and missing protocols
-     */
-    private fun fixImageUrl(url: String?): String? {
-        if (url.isNullOrBlank()) return null
-
-        return when {
-            url.startsWith("http://") || url.startsWith("https://") -> url
-            url.startsWith("//") -> "https:$url"
-            url.startsWith("/") -> "$mainUrl$url"
-            else -> "$mainUrl/$url"
-        }
-    }
-
-    override suspend fun loadMainPage(
-        page: Int,
-        mainCategory: String?,
-        orderBy: String?,
-        tag: String?
-    ): HeadMainPageResponse {
-        val tagPath = if (!tag.isNullOrBlank()) "/tag/$tag" else ""
-        val order = orderBy ?: "popular"
-        val url = "$mainUrl/en/novel-list$tagPath?sort=$order&page=$page"
-
-        Log.d(TAG, "Loading main page: $url")
-        val doc = app.get(url).document
-
-        val novels = doc.select(".series-list > div > div > .serie-item").mapNotNull { element ->
-            val titleWrap = element.selectFirst(".title-wrap") ?: return@mapNotNull null
-            val titleHolder = titleWrap.selectFirst("a.title") ?: return@mapNotNull null
-            val href = titleHolder.attr("href")
-            if (href.isBlank()) return@mapNotNull null
-
-            // Remove raw title element to get clean title
-            titleHolder.selectFirst(".rawtitle")?.remove()
-            val name = titleHolder.text().trim()
-            if (name.isBlank()) return@mapNotNull null
-
-            // Try multiple selectors for image
-            val imgElement = element.selectFirst(".img-wrap img")
-                ?: element.selectFirst(".image-wrap img")
-                ?: element.selectFirst("a img")
-                ?: element.selectFirst("img")
-
-            // Try different attributes for image URL
-            val rawPosterUrl = imgElement?.attr("data-src")
-                ?: imgElement?.attr("src")
-                ?: imgElement?.attr("data-lazy-src")
-
-            val posterUrl = fixImageUrl(rawPosterUrl)
-
-            Log.d(TAG, "Novel: $name, Image: $posterUrl")
-
-            // Try to get rating
-            val ratingText = element.selectFirst(".rating-text")?.text()
-            val rating = ratingText?.toFloatOrNull()?.times(20)?.toInt()
-
-            // Try to get latest chapter info
-            val latestChapter = element.selectFirst(".chapter-info")?.text()
-
-            val fixedUrl = fixUrlNull(href) ?: return@mapNotNull null
-
-            SearchResponse(
-                name = name,
-                url = if (fixedUrl.startsWith("http")) fixedUrl else "$mainUrl$fixedUrl",
-                posterUrl = posterUrl,
-                rating = rating,
-                latestChapter = latestChapter,
-                apiName = this.name
-            )
-        }
-
-        Log.d(TAG, "Found ${novels.size} novels on main page")
-        return HeadMainPageResponse(url, novels)
-    }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/en/novel-finder?text=${query.replace(" ", "+")}"
-        Log.d(TAG, "Searching: $url")
         val doc = app.get(url).document
-
-        return doc.select(".series-list > div > div > .serie-item").mapNotNull { element ->
-            val titleWrap = element.selectFirst(".title-wrap") ?: return@mapNotNull null
+        return doc.select(".series-list>div>div>.serie-item").mapNotNull { select ->
+            val titleWrap = select.selectFirst(".title-wrap") ?: return@mapNotNull null
             val titleHolder = titleWrap.selectFirst("a.title") ?: return@mapNotNull null
-            val href = titleHolder.attr("href")
-            if (href.isBlank()) return@mapNotNull null
-
-            // Remove raw title element to get clean title
+            val href = titleHolder.attr("href") ?: return@mapNotNull null
             titleHolder.selectFirst(".rawtitle")?.remove()
 
             val name = titleHolder.text() ?: return@mapNotNull null
             newSearchResponse(name, href) {
-                posterUrl = fixUrlNull(element.selectFirst("a img")?.attr("src"))
+                posterUrl = fixUrlNull(select.selectFirst("a img")?.attr("src"))
             }
         }
     }
 
+
     private suspend fun getChapterRange(
         url: String,
-        rawId: Long,
+        chaptersJson: ResultJsonResponse.Root,
         start: Long,
         end: Long
     ): List<ChapterData> {
-        return try {
-            val chapterDataUrl =
-                "$mainUrl/api/chapters/$rawId?start=$start&end=$end"
-            val chaptersDataJson = app.get(chapterDataUrl).text
-            val chaptersData = parseJson<ResultChaptersJsonResponse.Root>(chaptersDataJson)
+        val chapterDataUrl =
+            "$mainUrl/api/chapters/${chaptersJson.props.pageProps.serie.serieData.rawId}?start=$start&end=$end"
+        val chaptersDataJson =
+            app.get(chapterDataUrl).text
+        val chaptersData = parseJson<ResultChaptersJsonResponse.Root>(chaptersDataJson)
 
-            chaptersData.chapters.map { chapter ->
-                // Build chapter URL - use the novel URL + /chapter-{order}
-                val chapterUrl = "${url.trimEnd('/')}/chapter-${chapter.order}"
-                Log.d(TAG, "Chapter ${chapter.order}: $chapterUrl")
-
-                newChapterData(
-                    name = "#${chapter.order} ${chapter.title}",
-                    url = chapterUrl
-                ) {
-                    dateOfRelease = chapter.updatedAt
-                }
+        return chaptersData.chapters.map { chapter ->
+            newChapterData(
+                "#${chapter.order} ${chapter.title}",
+                "${url.trimEnd('/')}/chapter-${chapter.order}"
+            ) {
+                dateOfRelease = chapter.updatedAt
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error fetching chapters: ${e.message}", e)
-            emptyList()
         }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        Log.d(TAG, "Loading novel: $url")
         val doc = app.get(url).document
-
-        // Get title - try multiple selectors
-        val title = doc.selectFirst(".title-wrap .text-uppercase")?.text()?.trim()
-            ?: doc.selectFirst("h1.title")?.text()?.trim()
-            ?: doc.selectFirst(".novel-title")?.text()?.trim()
-            ?: throw ErrorLoadingException("Could not find title")
-
-        Log.d(TAG, "Novel title: $title")
-
-        // Parse JSON data from Next.js
+        val titleWrap =
+            doc.selectFirst(".title-wrap") ?: throw ErrorLoadingException("No title wrapping")
+        val title =
+            titleWrap.selectFirst(".text-uppercase")?.text()
+                ?: throw ErrorLoadingException("No title")
         val jsonNode = doc.selectFirst("#__NEXT_DATA__")
         val json = jsonNode?.data() ?: throw ErrorLoadingException("no chapters")
         val chaptersJson = parseJson<ResultJsonResponse.Root>(json)
 
-        val serieData = chaptersJson.props.pageProps.serie.serieData
-        val totalChapters = serieData.rawChapterCount
 
         val chapters = mutableListOf<ChapterData>()
-
-        if (totalChapters <= CHAPTERS_PER_REQUEST) {
-            chapters.addAll(getChapterRange(url, serieData.rawId, 1, totalChapters))
-        } else {
-            var start = 1L
-            while (start <= totalChapters) {
-                val end = minOf(start + CHAPTERS_PER_REQUEST - 1, totalChapters)
-                chapters.addAll(getChapterRange(url, serieData.rawId, start, end))
-                start = end + 1
-            }
-        }
-
-        Log.d(TAG, "Total chapters loaded: ${chapters.size}")
-
-        // Extract poster - try multiple selectors and attributes
-        val imgElement = doc.selectFirst(".image-wrap img")
-            ?: doc.selectFirst(".novel-cover img")
-            ?: doc.selectFirst(".cover img")
-            ?: doc.selectFirst("img.cover")
-
-        val rawPosterUrl = imgElement?.attr("data-src")
-            ?: imgElement?.attr("src")
-            ?: imgElement?.attr("data-lazy-src")
-
-        val posterUrl = fixImageUrl(rawPosterUrl)
-        Log.d(TAG, "Poster URL: $posterUrl")
-
-        // Extract metadata
-        val synopsis = doc.selectFirst(".desc-wrap")?.text()?.trim()
-            ?: doc.selectFirst(".description")?.text()?.trim()
-            ?: doc.selectFirst(".synopsis")?.text()?.trim()
-
-        val rating = doc.selectFirst(".rating-text")?.text()?.toRate(5)
-
-        // Extract author
-        val author = doc.select(".detail-line, .info-line, .meta-item").find { line ->
-            line.text().contains("Author", ignoreCase = true)
-        }?.selectFirst("a, span:last-child")?.text()?.trim()
-
-        // Extract views
-        val views = doc.select(".detail-line, .info-line, .meta-item").find { line ->
-            line.text().contains("Views", ignoreCase = true)
-        }?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
-
-        // Extract status
-        val statusText = doc.select(".detail-line, .info-line, .meta-item").find { line ->
-            line.text().contains("Status", ignoreCase = true)
-        }?.selectFirst("span, a")?.text()?.trim()
-
-        // Extract genres/tags
-        val genres = doc.select(".genre-wrap a, .tag-wrap a, .genres a, .tags a")
-            .map { it.text().trim() }
-            .filter { it.isNotBlank() }
-
+        chapters.addAll(
+            getChapterRange(
+                url,
+                chaptersJson,
+                1,
+                chaptersJson.props.pageProps.serie.serieData.rawChapterCount
+            )
+        )
         return newStreamResponse(title, url, chapters) {
-            this.synopsis = synopsis
-            this.posterUrl = posterUrl
-            this.views = views
-            this.author = author
-            this.rating = rating
+            synopsis = doc.selectFirst(".desc-wrap")?.text()
+            posterUrl = fixUrlNull(doc.selectFirst(".image-wrap > img")?.attr("src"))
+            val details = doc.select("div.detail-buttons div")
+            details.map{div ->
+                if(div.text().contains("Views")){
+                    val text = div.ownText().split(" ")
+                    this.views = text.getOrNull(2)?.trim()?.toIntOrNull()
+                    setStatus(text.getOrNull(0)?.trim())
+                }
+            }
+            val ratingElement = details.selectFirst("div.rating")
+            val ratingText = ratingElement?.text()
+
+            peopleVoted = ratingText?.let { text ->
+                Regex("""\((\d+)""").find(text)?.groupValues?.get(1)?.toIntOrNull()
+            }
+            rating = ratingText?.let { text ->
+                Regex("""([\d.]+)""").find(text)?.groupValues?.get(1)?.toFloatOrNull()?.let {
+                    it.times(20).times(10).roundToInt()
+                }
+            }
         }
     }
 
+
     override suspend fun loadHtml(url: String): String {
-        val doc = app.get(url).document
+        val doc = appWithInterceptor.get(url).document
         val jsonNode = doc.selectFirst("#__NEXT_DATA__")
         val json = jsonNode?.data() ?: throw ErrorLoadingException("no chapters")
         val chaptersJson = parseJson<LoadJsonResponse.Root>(json)
         val text = StringBuilder()
         val chapter = chaptersJson.props.pageProps.serie
 
-        val root = app.post(
-            "$mainUrl/api/reader/get", data = mapOf(
-                "chapter_id" to chapter.chapter.id.toString(),
-                "chapter_no" to chapter.serieData.slug.toString(),
-                "force_retry" to "false",
-                "language" to "en",
-                "raw_id" to chapter.serieData.rawId.toString(),
-                "retry" to "false",
-                "translate" to "web", // translate=ai just returns a job and I am too lazy to fix that
-            )
-        ).parsed<LoadJsonResponse2.Root>()
+        val root = appWithInterceptor.post(
+                "$mainUrl/api/reader/get", data = mapOf(
+                    "chapter_id" to chapter.chapter.id.toString(),
+                    "chapter_no" to chapter.serieData.slug.toString(),
+                    "force_retry" to "false",
+                    "language" to "en",
+                    "raw_id" to chapter.serieData.rawId.toString(),
+                    "retry" to "false",
+                    "translate" to "web",
+                )
+            ).parsed<LoadJsonResponse2.Root>()
+
         val paragraphs = decryptContent(root.data.data.body)
 
         for (p in paragraphs) {
@@ -304,7 +147,7 @@ class WtrLabProvider : MainAPI() {
         return text.toString()
     }
 
-    private fun decryptContent(encryptedText: String): List<String> {
+    fun decryptContent(encryptedText: String): List<String> {
         if (encryptedText.isEmpty()) return emptyList()
 
         var isArray = false
@@ -347,7 +190,6 @@ class WtrLabProvider : MainAPI() {
     }
 }
 
-// Data classes remain the same...
 object ResultChaptersJsonResponse {
     data class Root(
         val chapters: List<Chapter>,

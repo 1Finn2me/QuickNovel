@@ -14,13 +14,8 @@ import com.lagradost.quicknovel.newChapterData
 import com.lagradost.quicknovel.newSearchResponse
 import com.lagradost.quicknovel.newStreamResponse
 import com.lagradost.quicknovel.setStatus
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import org.json.JSONObject
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.util.concurrent.ConcurrentHashMap
 
@@ -38,11 +33,6 @@ class NovelFireProvider : MainAPI() {
     // Thread-safe caches
     private val commentCursors = ConcurrentHashMap<String, String?>()
     private val postIdCache = ConcurrentHashMap<String, String>()
-
-    // Parallel loading settings
-    private val batchSize = 5
-    private val maxRetries = 3
-    private val retryDelayMs = 3500L
 
     override val orderBys = listOf(
         "Rank (Top)" to "rank-top",
@@ -144,7 +134,7 @@ class NovelFireProvider : MainAPI() {
             .firstOrNull() ?: url
     }
 
-    private fun extractPostId(document: Document): String? {
+    private fun extractPostId(document: org.jsoup.nodes.Document): String? {
         return document.selectFirst("#novel-report[report-post_id]")
             ?.attr("report-post_id")
             ?.takeIf { it.isNotBlank() }
@@ -252,15 +242,8 @@ class NovelFireProvider : MainAPI() {
             postIdCache[novelSlug] = postId
         }
 
-        // Get total chapter count for fallback pagination
-        val chapterCountText = document.selectFirst(".header-stats .icon-book-open")
-            ?.parent()?.text()?.trim()
-            ?.replace(Regex("[^0-9]"), "")
-        val totalChapters = chapterCountText?.toIntOrNull() ?: 0
-        val totalPages = (totalChapters + 99) / 100 // Ceiling division
-
-        // Load chapters - AJAX first, then parallel HTML fallback
-        val chapters = loadChaptersOptimized(novelSlug, postId, totalPages)
+        // Load chapters using optimized method (check last chapter, generate rest)
+        val chapters = getChapters(novelSlug)
 
         val data = chapters.map { chapter ->
             newChapterData(name = chapter.name, url = chapter.url) {
@@ -311,246 +294,64 @@ class NovelFireProvider : MainAPI() {
     }
 
     // ================================================================
-    // OPTIMIZED CHAPTER LOADING
+    // OPTIMIZED CHAPTER LOADING - Check last chapter, generate rest
     // ================================================================
 
     private data class ChapterInfo(
         val name: String,
         val url: String,
-        val dateOfRelease: String? = null,
-        val chapterNumber: Int = 0
+        val dateOfRelease: String? = null
     )
 
     /**
      * Optimized chapter loading:
-     * 1. Try AJAX endpoint first (single request for ALL chapters)
-     * 2. If AJAX fails, use parallel HTML loading with batching
+     * 1. Get first page to check for pagination
+     * 2. If pagination exists, get the last page
+     * 3. Get the last chapter link from the last page
+     * 4. Extract total chapter number from the last chapter URL
+     * 5. Generate all chapter URLs from 1 to totalChapters
+     *
+     * This only makes 2 requests instead of loading all pages
      */
-    private suspend fun loadChaptersOptimized(
-        novelSlug: String,
-        postId: String?,
-        totalPages: Int
-    ): List<ChapterInfo> {
-        // Try AJAX first - this returns ALL chapters in one request
-        if (!postId.isNullOrBlank()) {
-            try {
-                val chapters = loadChaptersViaAjax(novelSlug, postId)
-                if (chapters.isNotEmpty()) {
-                    return chapters
-                }
-            } catch (e: RateLimitException) {
-                // Wait and retry once
-                delay(retryDelayMs)
-                try {
-                    val chapters = loadChaptersViaAjax(novelSlug, postId)
-                    if (chapters.isNotEmpty()) {
-                        return chapters
-                    }
-                } catch (e2: Exception) {
-                    logError(e2)
-                }
-            } catch (e: AjaxNotFoundException) {
-                // Fall through to HTML parsing
-            } catch (e: Exception) {
-                logError(e)
-            }
-        }
+    private suspend fun getChapters(novelSlug: String): List<ChapterInfo> {
+        val firstPageUrl = "$mainUrl/book/$novelSlug/chapters?page=1"
+        val document = app.get(firstPageUrl).document
 
-        // Fallback: Load chapters from HTML pages in PARALLEL
-        return if (totalPages > 0) {
-            loadChaptersFromHtmlParallel(novelSlug, totalPages)
-        } else {
-            // If we don't know total pages, load sequentially until no more
-            loadChaptersFromHtmlSequential(novelSlug)
-        }
-    }
+        // Check for pagination
+        val pagination = document.selectFirst("div.pagenav div.pagination-container nav ul.pagination")
+        if (pagination != null) {
+            val lastPageElement = pagination.select("li").let { it.getOrNull(it.size - 2) }
+            val lastPageNumber = lastPageElement?.text()?.toIntOrNull() ?: 1
 
-    /**
-     * Load ALL chapters via single AJAX request
-     */
-    private suspend fun loadChaptersViaAjax(novelSlug: String, postId: String): List<ChapterInfo> {
-        val ajaxUrl = "$mainUrl/listChapterDataAjax?post_id=$postId"
-        val response = app.get(ajaxUrl)
-        val responseText = response.text
+            // Get the last page to find the last chapter
+            val lastPageUrl = "$mainUrl/book/$novelSlug/chapters?page=$lastPageNumber"
+            val lastPageDoc = app.get(lastPageUrl).document
+            val lastChapterLink = lastPageDoc.select("ul.chapter-list li a").last()?.attr("href") ?: ""
+            val totalChapters = lastChapterLink.substringAfterLast("/chapter-").toIntOrNull()
 
-        if (responseText.contains("You are being rate limited")) {
-            throw RateLimitException()
-        }
-
-        if (responseText.contains("Page Not Found 404")) {
-            throw AjaxNotFoundException()
-        }
-
-        val json = JSONObject(responseText)
-        val dataArray = json.optJSONArray("data") ?: return emptyList()
-
-        val chapters = mutableListOf<ChapterInfo>()
-
-        for (i in 0 until dataArray.length()) {
-            val chapterObj = dataArray.getJSONObject(i)
-            val nSort = chapterObj.optInt("n_sort", i + 1)
-            val title = chapterObj.optString("title", "")
-            val slug = chapterObj.optString("slug", "")
-            val createdAt = chapterObj.optString("created_at", null)
-
-            val chapterName = when {
-                title.isNotBlank() -> Jsoup.parse(title).text()
-                slug.isNotBlank() -> Jsoup.parse(slug).text()
-                else -> "Chapter $nSort"
-            }
-
-            chapters.add(ChapterInfo(
-                name = chapterName,
-                url = "book/$novelSlug/chapter-$nSort",
-                dateOfRelease = createdAt,
-                chapterNumber = nSort
-            ))
-        }
-
-        return chapters.sortedBy { it.chapterNumber }
-    }
-
-    /**
-     * Load chapters from HTML pages in PARALLEL batches
-     * This is much faster than sequential loading
-     */
-    private suspend fun loadChaptersFromHtmlParallel(
-        novelSlug: String,
-        totalPages: Int
-    ): List<ChapterInfo> = coroutineScope {
-        val allChapters = mutableListOf<ChapterInfo>()
-        val seenUrls = ConcurrentHashMap.newKeySet<String>()
-
-        // Process pages in batches
-        for (batchStart in 1..totalPages step batchSize) {
-            val batchEnd = minOf(batchStart + batchSize - 1, totalPages)
-            val pageRange = (batchStart..batchEnd).toList()
-
-            var retryCount = 0
-            var success = false
-
-            while (!success && retryCount < maxRetries) {
-                try {
-                    // Load all pages in this batch in PARALLEL
-                    val results = pageRange.map { page ->
-                        async {
-                            loadSingleChapterPage(novelSlug, page)
-                        }
-                    }.awaitAll()
-
-                    // Collect results
-                    results.flatten().forEach { chapter ->
-                        if (seenUrls.add(chapter.url)) {
-                            allChapters.add(chapter)
-                        }
-                    }
-                    success = true
-
-                } catch (e: RateLimitException) {
-                    retryCount++
-                    if (retryCount < maxRetries) {
-                        delay(retryDelayMs)
-                    } else {
-                        throw e
-                    }
+            if (totalChapters != null) {
+                // Generate all chapters from 1 to totalChapters
+                return (1..totalChapters).map { chapterNumber ->
+                    ChapterInfo(
+                        name = "Chapter $chapterNumber",
+                        url = "book/$novelSlug/chapter-$chapterNumber"
+                    )
                 }
             }
         }
 
-        allChapters.sortedBy { it.chapterNumber }
-    }
+        // Fallback: Parse chapters from the first page if no pagination
+        return document.select("ul.chapter-list li").mapNotNull { li ->
+            val a = li.selectFirst("a") ?: return@mapNotNull null
+            val name = a.selectFirst("span.chapter-title")?.text()
+                ?: a.attr("title").ifBlank { a.text() }
+            val url = deSlash(a.attr("href").removePrefix(mainUrl).removePrefix("/"))
+            val date = li.selectFirst("span.chapter-update")?.text()
+                ?: li.selectFirst("time.chapter-update")?.text()
 
-    /**
-     * Load a single chapter page (used in parallel loading)
-     */
-    private suspend fun loadSingleChapterPage(novelSlug: String, page: Int): List<ChapterInfo> {
-        val chaptersUrl = "$mainUrl/book/$novelSlug/chapters?page=$page"
-        val response = app.get(chaptersUrl)
-        val responseText = response.text
-
-        if (responseText.contains("You are being rate limited")) {
-            throw RateLimitException()
-        }
-
-        val document = Jsoup.parse(responseText)
-        val chapterItems = document.select("ul.chapter-list li")
-
-        return chapterItems.mapNotNull { item ->
-            val linkElement = item.selectFirst("a") ?: return@mapNotNull null
-            val href = linkElement.attr("href")
-
-            if (!href.contains("/chapter-")) return@mapNotNull null
-
-            val chapterTitle = linkElement.attr("title").ifBlank {
-                item.selectFirst("strong.chapter-title")?.text()?.trim()
-                    ?: linkElement.text().trim()
-            }
-
-            val timeElement = item.selectFirst("time.chapter-update")
-            val dateOfRelease = timeElement?.text()?.trim()
-
-            val chapterUrl = deSlash(href.removePrefix(mainUrl).removePrefix("/"))
-
-            // Extract chapter number from URL
-            val chapterNumber = Regex("chapter-(\\d+)").find(chapterUrl)
-                ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-
-            ChapterInfo(
-                name = chapterTitle,
-                url = chapterUrl,
-                dateOfRelease = dateOfRelease,
-                chapterNumber = chapterNumber
-            )
+            ChapterInfo(name, url, date)
         }
     }
-
-    /**
-     * Fallback: Sequential loading when we don't know total pages
-     */
-    private suspend fun loadChaptersFromHtmlSequential(novelSlug: String): List<ChapterInfo> {
-        val allChapters = mutableListOf<ChapterInfo>()
-        val seenUrls = mutableSetOf<String>()
-        var currentPage = 1
-        var hasMorePages = true
-        val maxPages = 100
-
-        while (hasMorePages && currentPage <= maxPages) {
-            try {
-                val chapters = loadSingleChapterPage(novelSlug, currentPage)
-
-                if (chapters.isEmpty()) {
-                    hasMorePages = false
-                    continue
-                }
-
-                chapters.forEach { chapter ->
-                    if (seenUrls.add(chapter.url)) {
-                        allChapters.add(chapter)
-                    }
-                }
-
-                // Check if we got less than expected (last page)
-                if (chapters.size < 100) {
-                    hasMorePages = false
-                }
-
-                currentPage++
-
-            } catch (e: RateLimitException) {
-                delay(retryDelayMs)
-                // Retry same page
-            } catch (e: Exception) {
-                logError(e)
-                hasMorePages = false
-            }
-        }
-
-        return allChapters.sortedBy { it.chapterNumber }
-    }
-
-    // Custom exceptions for better control flow
-    private class RateLimitException : Exception("NovelFire is rate limiting requests")
-    private class AjaxNotFoundException : Exception("AJAX endpoint not found")
 
     // ================================================================
     // RELATED NOVELS
@@ -593,34 +394,45 @@ class NovelFireProvider : MainAPI() {
         val response = app.get(fullUrl)
         val document = response.document
 
+        val title = document.selectFirst("span.chapter-title")
         val contentElement = document.selectFirst("#content")
             ?: document.selectFirst(".chapter-content")
             ?: return null
 
-        // Remove obfuscation tags (like LNReader does)
+        // Remove the title if it's duplicated in content
+        title?.let { titleElement ->
+            contentElement.selectFirst("p")?.let { firstP ->
+                if (firstP.text().replace(" ", "").equals(titleElement.text().replace(" ", ""), ignoreCase = true)) {
+                    firstP.remove()
+                }
+            }
+        }
+
+        // Remove obfuscation tags
         contentElement.select(":not(p, h1, h2, h3, h4, h5, h6, span, i, b, u, em, strong, img, a, div, br, hr)")
             .forEach { ele ->
                 val tagName = ele.tagName()
-                // NovelFire uses tags starting with "nf" that are longer than 5 chars
                 if (tagName.length > 5 && tagName.startsWith("nf")) {
                     ele.remove()
                 }
             }
 
-        // Remove ads
+        // Remove ads and blocker images
         contentElement.select(
             ".ads, .adsbygoogle, script, style, .ads-holder, .ads-middle, " +
                     "[id*='ads'], [class*='ads'], .hidden, " +
-                    "[style*='display:none'], [style*='display: none']"
+                    "[style*='display:none'], [style*='display: none'], " +
+                    "img[src*=disable-blocker.jpg]"
         ).remove()
 
-        return contentElement.html()
+        val titleHtml = title?.outerHtml() ?: ""
+        return (titleHtml + contentElement.html())
             .replace("&nbsp;", " ")
             .trim()
     }
 
     // ================================================================
-    // REVIEWS / COMMENTS (unchanged)
+    // REVIEWS / COMMENTS
     // ================================================================
 
     override suspend fun loadReviews(
