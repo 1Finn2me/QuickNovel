@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.FileProvider
+import androidx.core.content.edit
 import androidx.preference.PreferenceManager
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.DeserializationFeature
@@ -17,9 +18,14 @@ import com.fasterxml.jackson.module.kotlin.KotlinModule
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.lagradost.quicknovel.BuildConfig
 import com.lagradost.quicknovel.CommonActivity.showToast
+import com.lagradost.quicknovel.DownloadProgressState
+import com.lagradost.quicknovel.DownloadState
 import com.lagradost.quicknovel.MainActivity.Companion.app
+import com.lagradost.quicknovel.NotificationHelper
 import com.lagradost.quicknovel.R
+import com.lagradost.quicknovel.StreamResponse
 import com.lagradost.quicknovel.mvvm.logError
+import kotlinx.coroutines.runBlocking
 import java.io.*
 import java.net.URL
 import java.net.URLConnection
@@ -30,18 +36,22 @@ const val UPDATE_TIME = 1000
 class InAppUpdater {
     companion object {
         // === IN APP UPDATER ===
+        @Volatile
+        private var isDownloadingUpdate: Boolean = false
+
+        private const val UPDATE_NOTIFICATION_ID = -1
         data class GithubAsset(
             @JsonProperty("name") val name: String,
             @JsonProperty("size") val size: Int, // Size bytes
-            @JsonProperty("browser_download_url") val browser_download_url: String, // download link
-            @JsonProperty("content_type") val content_type: String, // application/vnd.android.package-archive
+            @JsonProperty("browser_download_url") val browserDownloadUrl: String, // download link
+            @JsonProperty("content_type") val contentType: String, // application/vnd.android.package-archive
         )
 
         data class GithubRelease(
-            @JsonProperty("tag_name") val tag_name: String, // Version code
+            @JsonProperty("tag_name") val tagName: String, // Version code
             @JsonProperty("body") val body: String, // Desc
             @JsonProperty("assets") val assets: List<GithubAsset>,
-            @JsonProperty("target_commitish") val target_commitish: String, // branch
+            @JsonProperty("target_commitish") val targetCommitish: String, // branch
         )
 
         data class Update(
@@ -72,39 +82,21 @@ class InAppUpdater {
 
                 val versionRegex = Regex("""(.*?((\d)\.(\d)\.(\d)).*\.apk)""")
 
-                /*
-                val releases = response.map { it.assets }.flatten()
-                    .filter { it.content_type == "application/vnd.android.package-archive" }
-                val found =
-                    releases.sortedWith(compareBy {
-                        versionRegex.find(it.name)?.groupValues?.get(2)
-                    }).toList().lastOrNull()*/
-//                val found =
-//                    response.sortedWith(compareBy { release ->
-//                        release.assets.filter { it.content_type == "application/vnd.android.package-archive" }
-//                            .getOrNull(0)?.name?.let { it1 ->
-//                                versionRegex.find(
-//                                    it1
-//                                )?.groupValues?.get(2)
-//                            }
-//                    }).toList().lastOrNull()
                 val foundAsset = response.assets.getOrNull(0)
-                val currentVersion = packageName?.let {
-                    packageManager.getPackageInfo(
-                        it,
-                        0
-                    )
-                }
+                val currentVersion = packageManager.getPackageInfo(packageName, 0)
 
                 val foundVersion = foundAsset?.name?.let { versionRegex.find(it) }
                 val shouldUpdate =
-                    if (foundAsset?.browser_download_url != "" && foundVersion != null) currentVersion?.versionName?.compareTo(
-                        foundVersion.groupValues[2]
-                    )!! < 0 else false
+                    if (foundAsset != null && foundAsset.browserDownloadUrl != "" && foundVersion != null) {
+                        val currentV = currentVersion?.versionName ?: ""
+                        val foundV = foundVersion.groupValues[2]
+                        currentV < foundV
+                    } else false
+
                 return if (foundVersion != null) {
                     Update(
                         shouldUpdate,
-                        foundAsset.browser_download_url,
+                        foundAsset.browserDownloadUrl,
                         foundVersion.groupValues[2],
                         response.body
                     )
@@ -119,6 +111,8 @@ class InAppUpdater {
         }
 
         private fun Activity.downloadUpdate(url: String): Boolean {
+            if(isDownloadingUpdate) return false
+            isDownloadingUpdate = true
             var fullResume = false // IF FULL RESUME
             try {
                 // =================== DOWNLOAD POSTERS AND SETUP PATH ===================
@@ -129,13 +123,13 @@ class InAppUpdater {
                 val rFile = File(path)
                 try {
                     rFile.parentFile?.mkdirs()
-                } catch (t: Throwable) {
+                } catch (t: Throwable){
                     logError(t)
                 }
 
-                val _url = URL(url.replace(" ", "%20"))
+                val downloadUrl = URL(url.replace(" ", "%20"))
 
-                val connection: URLConnection = _url.openConnection()
+                val connection: URLConnection = downloadUrl.openConnection()
 
                 var bytesRead = 0L
 
@@ -171,6 +165,7 @@ class InAppUpdater {
                 }
                 if (clen <= 0) { // TO SMALL OR INVALID
                     //showNot(0, 0, 0, DownloadType.IsFailed, info)
+                    isDownloadingUpdate = false
                     return false
                 }
 
@@ -182,6 +177,7 @@ class InAppUpdater {
                 val buffer = ByteArray(1024)
                 var count: Int
                 //var lastUpdate = System.currentTimeMillis()
+                var lastUpdateTime = System.currentTimeMillis()
 
                 while (true) {
                     try {
@@ -191,6 +187,45 @@ class InAppUpdater {
                         bytesRead += count
                         bytesPerSec += count
                         output.write(buffer, 0, count)
+
+                        val currentTime = System.currentTimeMillis()
+                        val timeElapsed = currentTime - lastUpdateTime
+                        if (timeElapsed > UPDATE_TIME) {
+                            val progress = bytesRead
+                            val total = clen.toLong()
+
+                            val bps = (bytesPerSec * 1000) / timeElapsed.coerceAtLeast(1)
+                            val eta = if(bps > 0) (total - progress) / bps * 1000 else 0L
+                            bytesPerSec = 0
+                            lastUpdateTime = currentTime
+                            println("bps: $bps | eta: ${eta/1000}s | progress: $progress/$total")
+
+                            runBlocking {
+                                NotificationHelper.createNotification(
+                                    context = this@downloadUpdate,
+                                    source = url,
+                                    id = UPDATE_NOTIFICATION_ID,
+                                    load = StreamResponse(
+                                        url = url,
+                                        name = "QuickNovel Update",
+                                        data = emptyList(),
+                                        apiName = "QuickNovel"
+                                    ),
+                                    stateProgressState = DownloadProgressState(
+                                        state = DownloadState.IsDownloading,
+                                        downloaded = progress,
+                                        progress = progress,
+                                        total = total,
+                                        lastUpdatedMs = lastUpdateTime,
+                                        etaMs = eta
+                                    ),
+                                    showNotification = true,
+                                    progressInBytes = true,
+                                )
+                            }
+                            lastUpdateTime = currentTime
+                        }
+
                     } catch (t: Throwable) {
                         logError(t)
                         fullResume = true
@@ -207,6 +242,31 @@ class InAppUpdater {
                 output.flush()
                 output.close()
                 input.close()
+                runBlocking {
+                    NotificationHelper.createNotification(
+                        context = this@downloadUpdate,
+                        source = url,
+                        id = UPDATE_NOTIFICATION_ID,
+                        load = StreamResponse(
+                            url = url,
+                            name = "QuickNovel Update",
+                            data = emptyList(),
+                            apiName = "QuickNovel"
+                        ),
+                        stateProgressState = DownloadProgressState(
+                            DownloadState.IsDone,
+                            clen.toLong(),
+                            clen.toLong(),
+                            clen.toLong(),
+                            lastUpdateTime,
+                            null
+                        ),
+                        showNotification = true,
+                        progressInBytes = true
+                    )
+                }
+
+                isDownloadingUpdate = false
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     val contentUri = FileProvider.getUriForFile(
@@ -235,6 +295,7 @@ class InAppUpdater {
 
             } catch (t: Throwable) {
                 logError(t)
+                isDownloadingUpdate = false
                 return false
             }
         }
@@ -292,7 +353,7 @@ class InAppUpdater {
 
                             if (checkAutoUpdate) {
                                 setNeutralButton(R.string.dont_show_again) { _, _ ->
-                                    settingsManager.edit().putBoolean("auto_update", false).apply()
+                                    settingsManager.edit { putBoolean(getString(R.string.auto_update_key), false) }
                                 }
                             }
                         }
