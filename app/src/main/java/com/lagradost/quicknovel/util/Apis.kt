@@ -13,6 +13,7 @@ import com.lagradost.quicknovel.providers.AllNovelProvider
 import com.lagradost.quicknovel.providers.AnnasArchive
 import com.lagradost.quicknovel.providers.DevilNovelsProvider
 import com.lagradost.quicknovel.providers.ChrysanthemumGardenProvider
+import com.lagradost.quicknovel.providers.FanFictionProvider
 import com.lagradost.quicknovel.providers.FanMtlnProvider
 import com.lagradost.quicknovel.providers.FenrirRealProvider
 import com.lagradost.quicknovel.providers.FreewebnovelProvider
@@ -57,6 +58,7 @@ import com.lagradost.quicknovel.providers.SkyNovelsProvider
 import com.lagradost.quicknovel.providers.SonicMTLProvider
 import com.lagradost.quicknovel.providers.VynovelProvider
 import com.lagradost.quicknovel.providers.WattpadProvider
+import com.lagradost.quicknovel.providers.WebNovelFanficProvider
 import com.lagradost.quicknovel.providers.WtrLabProvider
 import com.lagradost.quicknovel.providers.WuxiaBoxProvider
 import com.lagradost.quicknovel.providers.WuxiaClickProvider
@@ -78,6 +80,7 @@ class Apis {
             FanMtlnProvider(),
             FenrirRealProvider(),
             FreewebnovelProvider(),
+            FanFictionProvider(),
             GraycityProvider(),
             HiraethTranslationProvider(),
             IndoWebNovelProvider(),
@@ -124,6 +127,7 @@ class Apis {
             VynovelProvider(),
             WattpadProvider(),
             WebNovelProvider(),
+            WebNovelFanficProvider(),
             WtrLabProvider(),
             WuxiaBoxProvider(),
             WuxiaClickProvider(),
