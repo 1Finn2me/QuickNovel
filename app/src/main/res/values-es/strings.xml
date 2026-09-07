@@ -38,7 +38,6 @@
     <string name="advanced_search">Búsqueda avanzada</string>
     <string name="advanced_search_desc">Muestra los resultados de búsqueda separados por proveedor</string>
     <string name="search_providers">Proveedores</string>
-    <string name="search_roviders">Proveedores</string>
     <string name="change_providers_descript">Cambiar proveedor</string>
     <string name="poster_open_source_descript">Ver fuente original</string>
     <string name="back_to_search">Volver a buscar</string>
@@ -200,7 +199,7 @@
     <!-- Copias de Seguridad (Backup) -->
     <string name="backup_settings">Copia de seguridad</string>
     <string name="restore_settings">Restaurar datos desde copia de seguridad</string>
-    <string name="backup_success">Copia de seguridad realizada con éxito</string>
+    <string name="backup_success">Copia de seguridad realizada con éxito %s</string>
     <string name="backup_failed">Fallo al respaldar, verifique permisos de almacenamiento</string>
     <string name="restore_success">Copia de seguridad cargada con éxito</string>
     <string name="restore_failed_format" formatted="true">Error al restaurar desde %s</string>

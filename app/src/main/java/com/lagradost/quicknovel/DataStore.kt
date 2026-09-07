@@ -18,6 +18,7 @@ const val DOWNLOAD_OFFSET: String = "downloads_offset"
 const val DOWNLOAD_EPUB_SIZE: String = "downloads_epub_size"
 const val DOWNLOAD_EPUB_LAST_ACCESS: String = "downloads_epub_last_access"
 const val DOWNLOAD_SORTING_METHOD: String = "download_sorting"
+const val HISTORY_SORTING_METHOD: String = "history_sorting"
 const val DOWNLOAD_NORMAL_SORTING_METHOD: String = "download_normal_sorting"
 const val DOWNLOAD_SETTINGS: String = "download_settings"
 const val EPUB_LOCK_ROTATION: String = "reader_epub_rotation"
@@ -28,6 +29,7 @@ const val EPUB_SCROLL_VOL: String = "reader_epub_scroll_volume"
 const val EPUB_AUTHOR_NOTES: String = "reader_epub_author_notes"
 const val EPUB_TTS_LOCK: String = "reader_epub_scroll_lock"
 const val EPUB_TTS_SET_SPEED: String = "reader_epub_tts_speed"
+const val RESULT_SORTING_METHOD: String = "result_sorting"
 const val RESULT_CHAPTER_SORT: String = "result_chapter_sort"
 const val RESULT_CHAPTER_FILTER_DOWNLOADED: String = "result_chapter_filter_download"
 const val RESULT_CHAPTER_FILTER_BOOKMARKED: String = "result_chapter_filter_bookmarked"
@@ -161,11 +163,18 @@ object DataStore {
     }
 
     fun Context.removeKeys(folder: String): Int {
-        val keys = getKeys(folder)
-        keys.forEach { value ->
-            removeKey(value)
+        val keys = getKeys("$folder/")
+        try {
+            getSharedPrefs().edit {
+                keys.forEach { value ->
+                    remove(value)
+                }
+            }
+            return keys.size
+        } catch (e: Exception) {
+            logError(e)
+            return 0
         }
-        return keys.size
     }
 
     fun <T> Context.setKey(path: String, value: T) {

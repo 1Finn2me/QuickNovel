@@ -49,7 +49,6 @@
     <string name="select_chapter">Выбрать главу</string>
     <string name="poster_descript">Плакат</string>
     <string name="sort_downloads_descript">Сортировать загрузки</string>
-    <string name="search_roviders">Поисковые провайдеры</string>
     <string name="search">Поиск</string>
     <string name="general">Общие</string>
     <string name="info">Инфо</string>
@@ -166,7 +165,7 @@
     <string name="backup_settings">Резервное копирование</string>
     <string name="restore_success">Загружен файл резервной копии</string>
     <string name="restore_failed_format" formatted="true">Не удалось восстановить данные из файла %s</string>
-    <string name="backup_success">Данные успешно сохранены</string>
+    <string name="backup_success">Данные успешно сохранены %s</string>
     <string name="backup_failed">Нет прав на хранение, попробуйте снова</string>
     <string name="backup_failed_error_format">Ошибка резервного копирования %s</string>
     <string name="tts_locale">Язык</string>

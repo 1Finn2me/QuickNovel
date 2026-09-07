@@ -6,7 +6,6 @@ import com.lagradost.quicknovel.ErrorLoadingException
 import com.lagradost.quicknovel.HeadMainPageResponse
 import com.lagradost.quicknovel.LoadResponse
 import com.lagradost.quicknovel.MainAPI
-import com.lagradost.quicknovel.MainActivity.Companion.app
 import com.lagradost.quicknovel.R
 import com.lagradost.quicknovel.SearchResponse
 import com.lagradost.quicknovel.UserReview
@@ -14,6 +13,7 @@ import com.lagradost.quicknovel.fixUrlNull
 import com.lagradost.quicknovel.mvvm.logError
 import com.lagradost.quicknovel.mvvm.safe
 import com.lagradost.quicknovel.newChapterData
+import com.lagradost.quicknovel.newReview
 import com.lagradost.quicknovel.newSearchResponse
 import com.lagradost.quicknovel.newStreamResponse
 import com.lagradost.quicknovel.setStatus
@@ -27,9 +27,8 @@ class RoyalRoadProvider : MainAPI() {
     override val mainUrl = "https://www.royalroad.com"
     override val rateLimitTime = 500L
     override val hasMainPage = true
-
+    override val hasReviews = true
     override val iconId = R.drawable.big_icon_royalroad
-
     override val iconBackgroundId = R.color.royalRoadColor
 
     override val orderBys = listOf(
@@ -95,14 +94,8 @@ class RoyalRoadProvider : MainAPI() {
         "Tragedy" to "tragedy"
     ).sortedBy { it.first })
 
-    override val hasReviews = true
-
     @SuppressLint("SimpleDateFormat")
-    override suspend fun loadReviews(
-        url: String,
-        page: Int,
-        showSpoilers: Boolean
-    ): List<UserReview> {
+    override suspend fun loadReviews(url: String, page: Int, data: String?): List<UserReview> {
         val realUrl = "$url?sorting=top&reviews=$page" //SORTING ??
         val document = app.get(realUrl).document
         val reviews = document.select("div.reviews-container > div.review")
@@ -175,7 +168,6 @@ class RoyalRoadProvider : MainAPI() {
             }
 
             val avatar = scoreContent?.selectFirst("> div.avatar-container-general > img")
-            val avatarUrl = avatar?.attr("src")
 
             val scores = scoreHeader?.select("> div.advanced-score")
             val scoresData =
@@ -194,30 +186,29 @@ class RoyalRoadProvider : MainAPI() {
 
             val reviewTitle = reviewHeader?.selectFirst("> div > div > h4")?.text()
 
-            val username = reviewMeta?.selectFirst("> span > a")?.text()
-
             val sdf = java.text.SimpleDateFormat("yyyy-MM-dd")
 
-            val date =
+            val reviewDate =
                 reviewMeta?.selectFirst("> span > a > time")?.attr("unixtime")?.toLong()?.let {
                     Date(it * 1000)
                 }
 
-            val reviewTime = date?.let { sdf.format(it).toString() }
+            val reviewTime = reviewDate?.let { sdf.format(it).toString() }
 
             val reviewContent = textContent?.selectFirst("> div.review-content")
-            if (!showSpoilers) reviewContent?.removeClass("spoiler")
+            //if (!showSpoilers) reviewContent?.removeClass("spoiler")
+            reviewContent?.removeClass("spoiler")
             val reviewTxt = reviewContent?.html()
 
-            UserReview(
-                reviewTxt ?: return@mapNotNull null,
-                reviewTitle,
-                username,
-                reviewTime,
-                fixUrlNull(avatarUrl),
-                overallScore,
-                scoresData
-            )
+            newReview(reviewTxt ?: return@mapNotNull null) {
+                date = reviewTime
+                title = reviewTitle
+                username = reviewMeta?.selectFirst("> span > a")?.text()
+                avatarUrl = avatar?.attr("src")
+                rating = overallScore
+                ratings = scoresData
+                containsSpoilers = reviewContent.getElementsByClass("spoiler").isNotEmpty()
+            }
         }
     }
 
@@ -357,12 +348,12 @@ class RoyalRoadProvider : MainAPI() {
                     ?.attr("src")
 
             val synoDescript = document.select("div.description > div")
-            val synoParts = synoDescript.select("> p")
-            synopsis = if (synoParts.isEmpty() && synoDescript.hasText()) {
+           // val synoParts = synoDescript.select("> p")
+            synopsis = synoDescript.html() /*if (synoParts.isEmpty() && synoDescript.hasText()) {
                 synoDescript.text().replace("\n", "\n\n") // JUST IN CASE
             } else {
                 synoParts.joinToString(separator = "\n\n") { it.text() }
-            }
+            }*/
             author = document.selectFirst("h4.font-white > span > a")?.text()
             val ratingAttr = document.selectFirst("span.font-red-sunglo")?.attr("data-content")
             tags = document.select("span.tags > a").map { it.text() }

@@ -70,7 +70,7 @@ import com.lagradost.quicknovel.util.CoilImagesPlugin.CoilStore
 import com.lagradost.quicknovel.util.Coroutines.ioSafe
 import com.lagradost.quicknovel.util.Coroutines.runOnMainThread
 import com.lagradost.quicknovel.util.GoogleTranslateOnline
-import com.lagradost.safefile.closeQuietly
+import com.lagradost.quicknovel.util.SubtitleHelper
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
 import io.noties.markwon.MarkwonConfiguration
@@ -96,13 +96,13 @@ import me.ag2s.epublib.util.zip.AndroidZipFile
 import org.commonmark.node.Node
 import org.jsoup.Jsoup
 import java.io.File
+import java.io.InputStream
 import java.net.URLDecoder
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
-import kotlin.math.pow
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty
 
@@ -176,17 +176,19 @@ abstract class AbstractBook {
     abstract fun getLoadingStatus(index: Int): String?
 
     @Throws
-    open fun loadImage(image: String): ByteArray? {
-        return null
-    }
+    open fun loadImage(image: String): InputStream? = null
 
     fun loadImageBitmap(image: String): Bitmap? {
-        try {
-            val data = this.loadImage(image) ?: return null
-            return BitmapFactory.decodeByteArray(data, 0, data.size)
+        return try {
+            // read file and not save
+            val stream = this.loadImage(image)
+            return if (stream != null) {
+                 BookDownloader2Helper.decodeSafeBitmap(data = stream.readBytes())
+            }
+            else null
         } catch (t: Throwable) {
             logError(t)
-            return null
+            null
         }
     }
 
@@ -331,38 +333,11 @@ class RegularBook(val data: EpubBook) : AbstractBook() {
         return listOfNotNull(author.firstname, author.lastname).joinToString(" ").ifBlank { null }
     }
 
-    override fun loadImage(image: String): ByteArray? {
-        // Clean the image path - remove ../ and ./ prefixes, decode URL encoding
-        val cleanImage = try {
-            java.net.URLDecoder.decode(image, "UTF-8")
-        } catch (_: Exception) {
-            image
-        }.removePrefix("../").removePrefix("./")
-
-        val imageFileName = cleanImage.substringAfterLast("/").lowercase()
-
-        return data.resources.resourceMap.values.find { resource ->
-            if (!resource.mediaType.name.contains("image")) return@find false
-
-            val resourceHref = resource.href ?: return@find false
-            val resourceFileName = resourceHref.substringAfterLast("/").lowercase()
-
-            // Method 1: Exact filename match (most reliable)
-            if (resourceFileName == imageFileName) return@find true
-
-            // Method 2: Resource href ends with clean image path
-            // e.g., "OEBPS/Images/img.jpg".endsWith("Images/img.jpg")
-            if (resourceHref.endsWith(cleanImage, ignoreCase = true)) return@find true
-
-            // Method 3: Clean image path ends with resource href
-            // e.g., "../Images/img.jpg" cleaned to "Images/img.jpg" ends with "img.jpg"
-            if (cleanImage.endsWith(resourceHref, ignoreCase = true)) return@find true
-
-            // Method 4: Original image path ends with resource href (for absolute paths)
-            if (image.endsWith(resourceHref, ignoreCase = true)) return@find true
-
-            false
-        }?.data
+    override fun loadImage(image: String): InputStream? {
+        val decodedImage = try { URLDecoder.decode(image, "UTF-8") } catch (e: Exception) { image }
+        val res = data.resources.resourceMap[decodedImage]
+            ?: data.resources.resourceMap[image]
+        return res?.inputStream
     }
 
     override fun size(): Int = allTocReferences.size
@@ -400,9 +375,21 @@ class RegularBook(val data: EpubBook) : AbstractBook() {
 
                 doc.select("img, image").forEach { img ->
                     val attrName = if (img.tagName() == "image") "xlink:href" else "src"
-                    val src = img.attr(attrName)
+                    var src = img.attr(attrName)
                     if (src.isNotEmpty() && !src.startsWith("http") && !src.startsWith("data:")) {
-                        img.attr(attrName, resolveRelativePath(basePath, src))
+                        try {
+                            val decodedSrc = URLDecoder.decode(src, "UTF-8")
+                            src = resolveRelativePath(basePath, decodedSrc)
+                        } catch (e: Throwable) {
+                            logError(e)
+                        }
+                    }
+                    if (img.tagName() == "image") {
+                        val newImg = doc.createElement("img")
+                        newImg.attr("src", src)
+                        img.replaceWith(newImg)
+                    } else {
+                        img.attr("src", src)
                     }
                 }
 
@@ -416,7 +403,12 @@ class RegularBook(val data: EpubBook) : AbstractBook() {
 
     private fun resolveRelativePath(basePath: String, relativePath: String): String {
         val cleanRelative = relativePath.substringBefore("?").substringBefore("#")
-        val fullPath = if (basePath.isEmpty()) cleanRelative else "$basePath/$cleanRelative"
+
+        val fullPath = if (cleanRelative.startsWith("/") || basePath.isEmpty()) {
+            cleanRelative
+        } else {
+            "$basePath/$cleanRelative"
+        }
 
         val parts = fullPath.split("/")
         val resolvedParts = ArrayDeque<String>()
@@ -424,7 +416,7 @@ class RegularBook(val data: EpubBook) : AbstractBook() {
         for (part in parts) {
             when (part) {
                 "", "." -> continue
-                ".." -> resolvedParts.removeLastOrNull()
+                ".." -> if (resolvedParts.isNotEmpty()) resolvedParts.removeLast()
                 else -> resolvedParts.addLast(part)
             }
         }
@@ -639,7 +631,7 @@ class ReadActivityViewModel : ViewModel() {
 
         for (idx in range) {
             requested += idx
-            loadIndividualChapter(idx, reload = false, notify = notify, postLoading = postLoading)
+            loadIndividualChapter(idx, notify = notify, postLoading = postLoading)
         }
 
     }
@@ -890,18 +882,10 @@ class ReadActivityViewModel : ViewModel() {
 
                     val asyncDrawables = rendered.getSpans<AsyncDrawableSpan>()
                     for (async in asyncDrawables) {
-                        try {
-                            val destination = async.drawable.destination
-                            val bitmap = book.loadImageBitmap(destination)
-                            if (bitmap != null) {
-                                val drawable = bitmap.toDrawable(Resources.getSystem())
-                                // Set intrinsic bounds so the image displays properly
-                                drawable.setBounds(0, 0, bitmap.width, bitmap.height)
-                                async.drawable.result = drawable
-                            }
-                        } catch (t: Throwable) {
-                            logError(t)
-                        }
+                        async.drawable.result =
+                            book.loadImageBitmap(async.drawable.destination)?.toDrawable(
+                                Resources.getSystem()
+                            )
                     }
 
                     // translation may strip stuff, idk how to solve that in a clean way atm
@@ -1003,9 +987,9 @@ class ReadActivityViewModel : ViewModel() {
             //the file
             val filePrefix =
                 "ml_${textHash}.${currentSettings.from}_to_${currentSettings.to}.${
-                    if (currentSettings.useOnlineTranslation) "online"
-                    else "offline"
-                }"
+                if (currentSettings.useOnlineTranslation) "online" 
+                else "offline"
+            }"
 
             // read from cache if it exists
             // we assume that parseTextToSpans is equivalent from restoring from the builder
@@ -1030,12 +1014,12 @@ class ReadActivityViewModel : ViewModel() {
             // --- Online mode ---
             if (currentSettings.useOnlineTranslation) {
                 translatedList = GoogleTranslateOnline.onlineTranslate(
-                    spans.map { it.text.toString() },
-                    currentSettings.from,
-                    currentSettings.to
-                ){ progress, total ->
-                    loading.invoke(Triple(spans[0].index, progress, total))
-                }
+                        spans.map { it.text.toString() },
+                        currentSettings.from,
+                        currentSettings.to
+                    ){ progress, total ->
+                        loading.invoke(Triple(spans[0].index, progress, total))
+                    }
 
             }
 
@@ -1165,9 +1149,11 @@ class ReadActivityViewModel : ViewModel() {
 
     private suspend fun initMLFromSettings(settings: MLSettings, allowDownload: Boolean) {
         try {
-            mlTranslator?.closeQuietly()
-            mlTranslator = null
+            mlTranslator?.close()
+        } catch (_ : Throwable) {}
+        mlTranslator = null
 
+        try {
             if (settings.isInvalid() || settings.useOnlineTranslation) {
                 mlSettings = settings
                 return
@@ -1190,7 +1176,9 @@ class ReadActivityViewModel : ViewModel() {
             mlSettings = settings
         } catch (_: TimeoutException) {
             showToast(R.string.unable_to_download_language)
-            mlTranslator?.closeQuietly()
+            try {
+                mlTranslator?.close()
+            } catch (_ : Throwable) {}
             mlTranslator = null
         } catch (t: Throwable) {
             logError(t)
@@ -1715,6 +1703,7 @@ class ReadActivityViewModel : ViewModel() {
             scrollIndex.char
         )
         setKey(EPUB_CURRENT_POSITION, book.title(), scrollIndex.index)
+
         context?.let {
             setKey(
                 EPUB_CURRENT_POSITION_CHAPTER,
@@ -1780,13 +1769,15 @@ class ReadActivityViewModel : ViewModel() {
     }
 
     override fun onCleared() {
-        println("onCleared===${System.currentTimeMillis()}")
+        //println("onCleared===${System.currentTimeMillis()}")
         lastChangeIndex?.let { setScrollKeys(it) }
         ttsSession?.release()
         ttsSession = null
         mlTranslator?.close()
         mlTranslator = null
-        super.onCleared()
+        if(::book.isInitialized) {
+            BookDownloader2.chapterReadChanged(book.title())
+        }
     }
 
 
@@ -1954,7 +1945,8 @@ class ReadActivityViewModel : ViewModel() {
         val useOnlineTranslation: Boolean = false
     ) {
         companion object {
-            val map = mapOf(
+            const val AUTO_LANG = "auto"
+            val map = listOf(
                 "af" to "Afrikaans",
                 "ar" to "Arabic",
                 "be" to "Belarusian",
@@ -2014,12 +2006,13 @@ class ReadActivityViewModel : ViewModel() {
                 "ur" to "Urdu",
                 "vi" to "Vietnamese",
                 "zh" to "Chinese",
-            )
+            ).sortedBy { (key, value) -> value }.toMap()
 
-            val list = map.toList()
-
+            val mapOnline = mapOf(AUTO_LANG to "Auto") + map
+            val mapList = map.toList()
+            val mapOnlineList = mapOnline.toList()
             fun fromShortToDisplay(from: String): String {
-                return map[from] ?: "Unknown"
+                return mapOnline[from] ?: "Unknown"
             }
         }
 
@@ -2036,13 +2029,17 @@ class ReadActivityViewModel : ViewModel() {
 
             val all = TranslateLanguage.getAllLanguages()
 
+            //If the user wants to translate to a language that doesn't exist,
+            //or wants to auto-detect their own language, do not allow it.
             if (!all.contains(to)) {
                 // no translation
                 return false
             }
 
-            if (!all.contains(from)) {
-                // no support for auto yet, see https://developers.google.com/ml-kit/language/identification/android
+            // no support for auto yet (for offlineTranslations), see https://developers.google.com/ml-kit/language/identification/android
+            //If the source language does not exist
+            //and the user did not select auto-detect language, do not allow it.
+            if (!all.contains(from) && !(useOnlineTranslation && from == AUTO_LANG)) {
                 return false
             }
 

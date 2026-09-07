@@ -1,8 +1,9 @@
 package com.lagradost.quicknovel.providers
 
+import android.net.Uri
 import com.lagradost.quicknovel.*
-import com.lagradost.quicknovel.MainActivity.Companion.app
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 
 open class HiraethTranslationProvider : MainAPI() {
     override val name = "HiraethTranslation"
@@ -10,7 +11,7 @@ open class HiraethTranslationProvider : MainAPI() {
     override val hasMainPage = true
     override val iconId = R.drawable.icon_hiraethtranslation
     override val iconBackgroundId = R.color.hiraethtranslation_header_color
-
+    override val hasReviews = true
     override val orderBys = listOf(
         "Latest Release" to "latest",
         "Relevance" to "",
@@ -33,8 +34,12 @@ open class HiraethTranslationProvider : MainAPI() {
         val returnValue =
             headers.mapNotNull { h ->
                 val h3 = h.selectFirst("h3.h4 > a") ?: return@mapNotNull null
-                newSearchResponse(name = h3.text(), url = h3.attr("href") ?: return@mapNotNull null) {
-                    posterUrl = fixUrlNull(h.selectFirst("div.c-image-hover > a > img")?.attr("src"))
+                newSearchResponse(
+                    name = h3.text(),
+                    url = h3.attr("href") ?: return@mapNotNull null
+                ) {
+                    posterUrl =
+                        fixUrlNull(h.selectFirst("div.c-image-hover > a > img")?.attr("src"))
                     latestChapter = h.select("div.latest-chap > span.chapter > a").text()
                 }
             }
@@ -57,7 +62,11 @@ open class HiraethTranslationProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query&post_type=wp-manga&m_orderby=latest").document
+        val document = app.get(
+            "$mainUrl/?s=${
+                Uri.encode(query.trim()).replace("%20", "+")
+            }&post_type=wp-manga"
+        ).document
 
         return document.select("div.c-tabs-item > div.row.c-tabs-item__content").mapNotNull { h ->
             val h3 = h.selectFirst("h3.h4 > a") ?: return@mapNotNull null
@@ -82,26 +91,26 @@ open class HiraethTranslationProvider : MainAPI() {
 //        val chaptersDataphp = app.post("$mainUrl/api/chapterlist.php", data = mapOf("aid" to aid!!))
 //        val chaptersDataphp = document.select("div.c-page__content > div")
         val data1 = document.select(
-                "ul.main.version-chap > li.wp-manga-chapter.free-chap > a"
-            )
-                .reversed()
-                .mapNotNull { c ->
-                    val href = c.attr("href") ?: return@mapNotNull null
-                    val cName = c.text()
-                    newChapterData(name = cName, url = href)
-                }
+            "ul.main.version-chap > li.wp-manga-chapter.free-chap > a"
+        )
+            .reversed()
+            .mapNotNull { c ->
+                val href = c.attr("href") ?: return@mapNotNull null
+                val cName = c.text()
+                newChapterData(name = cName, url = href)
+            }
 
-         val data2 = document.select(
-                "ul.sub-chap-list > li.wp-manga-chapter.free-chap > a"
-            )
-                .reversed()
-                .mapNotNull { c ->
-                    val href = c.attr("href") ?: return@mapNotNull null
-                    val cName = c.text()
-                    newChapterData(name = cName, url = href)
-                }
+        val data2 = document.select(
+            "ul.sub-chap-list > li.wp-manga-chapter.free-chap > a"
+        )
+            .reversed()
+            .mapNotNull { c ->
+                val href = c.attr("href") ?: return@mapNotNull null
+                val cName = c.text()
+                newChapterData(name = cName, url = href)
+            }
 
-        val  data = data1 + data2
+        val data = data1 + data2
 
         val prefix = trimmed
 
@@ -112,10 +121,12 @@ open class HiraethTranslationProvider : MainAPI() {
                     ?.text()
                     ?.splitToSequence(", ")
                     ?.toList()
-            posterUrl = fixUrlNull(document.select("div.summary_image > a > img.img-responsive").attr("src"))
+            posterUrl = fixUrlNull(
+                document.select("div.summary_image > a > img.img-responsive").attr("src")
+            )
 
             synopsis = document.selectFirst("div.summary__content")?.text()
-            val votes = document.select("div.summary-content.vote-details")
+            val votes = document.selectFirst("div.summary-content.vote-details")
             if (votes != null) {
                 rating = votes.select("span#averagerate").text().toFloat().times(200).toInt()
                 peopleVoted = votes.select("span#countrate").text().toInt()
@@ -124,6 +135,33 @@ open class HiraethTranslationProvider : MainAPI() {
             val statusHeader = document.selectFirst("div.summary-content")
 
             setStatus(statusHeader?.text() ?: statusHeader0?.text())
+            related = getRelated(document)
+        }
+    }
+
+    private fun getRelated(dc: Document): List<SearchResponse> {
+        return dc.select("div.related-manga div.col-md-3").mapNotNull { element ->
+            val href = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+            val title = element.selectFirst("h5")?.text() ?: return@mapNotNull null
+            newSearchResponse(
+                name = title,
+                url = href
+            ) {
+                posterUrl = fixUrlNull(element.selectFirst("img")?.attr("src"))
+            }
+        }
+    }
+
+    override suspend fun loadReviews(url: String, page: Int, data: String?): List<UserReview> {
+        if (page > 1) return emptyList()
+        val response = app.get(url).document
+
+        return response.select("div.wpd-thread-list > div.comment").mapNotNull { item ->
+            newReview(item.selectFirst("div.wpd-comment-text")?.text() ?: return@mapNotNull null) {
+                username = item.selectFirst("div.wpd-comment-author")?.text()
+                date = item.selectFirst("div.wpd-comment-date")?.attr("title")
+                avatarUrl = item.selectFirst("img")?.attr("src")
+            }
         }
     }
 }

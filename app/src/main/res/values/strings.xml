@@ -11,6 +11,7 @@
     <string name="restore_key" translatable="false">restore_key</string>
     <string name="restore_settings">Restore data from backup</string>
 
+    <string name="active_providers">%d providers enabled</string>
     <string name="search_hint">Search Novels…</string>
     <string name="synopsis">Synopsis</string>
     <string name="no_data">No Data</string>
@@ -47,12 +48,15 @@
     <string name="delete">Delete</string>
     <string name="open_in_browser">Open In Browser</string>
     <string name="select_chapter">Select Chapter</string>
+    <string name="select_location">Select location</string>
     <string name="poster_descript">Poster</string>
     <string name="sort_downloads_descript">Sort Downloads</string>
-    <string name="search_roviders">Search Providers</string>
+    <string name="search_providers">Search Providers</string>
     <string name="search">Search</string>
     <string name="general">General</string>
+    <string name="overall">Overall</string>
     <string name="info">Info</string>
+    <string name="app_settings">App settings</string>
 
     <string name="advanced_search">Advanced Search</string>
     <string name="advanced_search_desc">Gives you the search results separated by provider</string>
@@ -91,6 +95,10 @@
 
     <string name="grid_view">Grid</string>
     <string name="list_view">List</string>
+
+    <string name="download_list_view_key" translatable="false">download_list_view_key</string>
+    <string name="history_list_view_key" translatable="false">history_list_view_key</string>
+    <string name="search_list_view_key" translatable="false">search_list_view_key</string>
 
     <string name="download_open_action">Open</string>
     <string name="download_read_action">Read</string>
@@ -131,6 +139,7 @@
     <string name="general_settings">General</string>
     <string name="lock_tts">Lock TTS scroll area</string>
     <string name="reading_color">Reading Color</string>
+    <string name="reader_settings">Reader Settings</string>
     <string name="read_color">Reader Theme</string>
     <string name="show_battery">Show Battery</string>
     <string name="show_time">Show Time</string>
@@ -170,12 +179,14 @@
     <string name="twelve_hour_time">12 Hour time</string>
 
 
+    <string name="backup_location">Backup location</string>
     <string name="backup_settings">Backup data</string>
     <string name="restore_success">Loaded backup file</string>
     <string name="restore_failed_format" formatted="true">Failed to restore data from file %s</string>
-    <string name="backup_success">Successfully stored data</string>
+    <string name="backup_success">Successfully stored data at %s</string>
+    <string name="logcat_success">Successfully stored logcat at %s</string>
     <string name="backup_failed">Storage permissions missing, please try again</string>
-    <string name="backup_failed_error_format">Error backing up %s</string>
+    <string name="backup_failed_error_format">Error backing up: %s</string>
     <string name="tts_locale">Language</string>
     <string name="tts_voice">Voice</string>
     <string name="tts_voice_title">TTS Voice</string>
@@ -189,9 +200,9 @@
     <string name="remove">Remove</string>
     <string name="remove_from_history_format">This remove %s from your history.\nAre you sure?</string>
     <string name="permanently_delete_format">This will permanently delete %s.\nAre you sure?</string>
+    <string name="remove_from_bookmarks_format">This remove %s from your bookmarks.\nAre you sure?</string>
     <string name="remove_all_history">Are you sure?\nAll history will be lost.</string>
     <string name="remove_history">Remove History</string>
-    <string name="search_providers">Search Providers</string>
     <string name="no_more_chapters">No more chapters</string>
     <string name="paused">Paused</string>
     <string name="stopped">Stopped</string>
@@ -214,6 +225,7 @@
     <string name="new_update_found_format">New update found!\n %s -> %s</string>
     <string name="download_started">Download started</string>
     <string name="download_failed">Download failed</string>
+    <string name="download_in_progress">Downloading…</string>
     <string name="update">Update</string>
     <string name="dont_show_again">Don\'t show again</string>
     <string name="downloaded">Downloaded</string>
@@ -243,6 +255,8 @@
 
     <string name="default_sort">Default</string>
     <string name="recently_sort">Recently opened</string>
+    <string name="recently_checked_sort">Recently refreshed</string>
+    <string name="recently_visisted_sort">Recently read</string>
     <string name="alpha_sort">Alphabetical</string>
     <string name="download_sort">Download count</string>
     <string name="download_perc">Download percentage</string>
@@ -260,7 +274,12 @@
     <string name="ok">OK</string>
     <string name="more_info">More Info</string>
     <string name="download_path_key">download_path_key</string>
-    <string name="download_path_pref">Download path</string>
+
+    <string name="logcat_path_key">logcat_path_key</string>
+    <string name="epub_path_key">epub_path_key</string>
+    <string name="backup_path_key">backup_path_key</string>
+
+    <string name="download_path_pref">Download location</string>
     <string name="bionic_reading">Bionic Reading</string>
     <string name="selectable_text">Selectable text</string>
     <string name="sleep_timer">Sleep</string>
@@ -268,6 +287,8 @@
     <string name="sleep_format_stop">TTS will stop in %d min</string>
     <string name="google_translate">Google translate</string>
     <string name="online_translate">Online translation</string>
+    <string name="translate_from">Translate from language</string>
+    <string name="translate_to">Translate to language</string>
     <string name="toWhatLanguague">-></string>
     <string name="start_chapter">Skipped chapters</string>
     <string name="tts_speed">TTS Speed</string>
@@ -287,11 +308,14 @@
     <string name="clipboard_permission_error">Error accessing Clipboard, Please try again.</string>
     <string name="clipboard_unknown_error">Error copying, Please copy logcat and contact app support.</string>
     <string name="show_log_cat">Show Logcat 🐈</string>
+    <string name="log_cat">Logcat 🐈</string>
+    <string name="log_cat_location">Logcat location</string>
     <string name="unread">Unread</string>
     <string name="bookmarks">Bookmarks</string>
     <string name="bookmark">Bookmark</string>
     <string name="read">Read</string>
     <string name="import_epub">Import a book</string>
+    <string name="import_epubs">Import books</string>
     <string name="show_authors_notes">Show authors notes</string>
 
     <!-- Some errors -->

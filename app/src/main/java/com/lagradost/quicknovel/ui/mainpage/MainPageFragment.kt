@@ -1,27 +1,83 @@
 package com.lagradost.quicknovel.ui.mainpage
 
-import android.content.res.Configuration
 import android.os.Bundle
+import android.view.LayoutInflater
 import android.view.View
-import android.widget.ImageView
-import androidx.appcompat.widget.SearchView
-import androidx.core.view.isGone
-import androidx.core.view.isInvisible
-import androidx.core.view.isVisible
-import androidx.fragment.app.viewModels
-import androidx.recyclerview.widget.GridLayoutManager
-import androidx.recyclerview.widget.RecyclerView
-import com.lagradost.quicknovel.R
-import com.lagradost.quicknovel.databinding.FragmentMainpageBinding
-import com.lagradost.quicknovel.mvvm.Resource
-import com.lagradost.quicknovel.mvvm.observe
-import com.lagradost.quicknovel.mvvm.observeNullable
-import com.lagradost.quicknovel.ui.BaseFragment
-import com.lagradost.quicknovel.ui.setRecycledViewPool
-import com.lagradost.quicknovel.util.SingleSelectionHelper.showDialog
-import com.lagradost.quicknovel.util.UIHelper.fixPaddingStatusbar
+import android.view.ViewGroup
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.fragment.app.Fragment
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.lagradost.quicknovel.CommonActivity.showToast
+import com.lagradost.quicknovel.compose.CloudStreamTheme
+import com.lagradost.quicknovel.compose.ObserveEffect
+import com.lagradost.quicknovel.compose.loadPrimaryColor
+import com.lagradost.quicknovel.compose.loadThemeMode
 
 
+class MainPageFragment : Fragment() {
+    companion object {
+        fun newInstance(
+            apiName: String,
+            mainCategory: Int? = null,
+            orderBy: Int? = null,
+            tag: Int? = null
+        ): Bundle =
+            Bundle().apply {
+                putString("apiName", apiName)
+
+                if (mainCategory != null)
+                    putInt("mainCategory", mainCategory)
+                if (orderBy != null)
+                    putInt("orderBy", orderBy)
+                if (tag != null)
+                    putInt("tag", tag)
+            }
+        fun newInstance(
+            apiName: String,
+            filter : FilterQuery,
+        ): Bundle =
+            Bundle().apply {
+                putString("apiName", apiName)
+                putInt("mainCategory", filter.category)
+                putInt("orderBy", filter.orderBy)
+                putInt("tag", filter.tag)
+            }
+    }
+
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?,
+    ): View = ComposeView(inflater.context).apply {
+        setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+
+        setContent {
+            val viewModel: MainPageViewModel2 =
+                viewModel(factory = MainPageViewModel2.provideFactory(requireArguments()))
+
+            CloudStreamTheme(
+                mode = LocalContext.current.loadThemeMode(),
+                primaryColor = LocalContext.current.loadPrimaryColor(),
+            ) {
+                val state by viewModel.state.collectAsStateWithLifecycle()
+
+                ObserveEffect(viewModel.effect) { effect ->
+                    when(effect) {
+                        is MainPageEffect.ErrorLoading -> showToast(effect.error.toString())
+                    }
+                }
+                MainPageScreen(state,viewModel::onAction)
+            }
+        }
+    }
+}
+
+
+/*
 class MainPageFragment : BaseFragment<FragmentMainpageBinding>(
     BindingCreator.Inflate(FragmentMainpageBinding::inflate)
 ) {
@@ -316,4 +372,4 @@ class MainPageFragment : BaseFragment<FragmentMainpageBinding>(
             binding.mainpageSortbyHolder.isGone = it // CANT USE FILTER ON A SEARCHERS
         }
     }
-}
+}*/

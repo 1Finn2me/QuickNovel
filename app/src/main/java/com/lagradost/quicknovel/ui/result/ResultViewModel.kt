@@ -26,6 +26,7 @@ import com.lagradost.quicknovel.EPUB_CURRENT_POSITION
 import com.lagradost.quicknovel.EPUB_CURRENT_POSITION_CHAPTER
 import com.lagradost.quicknovel.EPUB_CURRENT_POSITION_READ_AT
 import com.lagradost.quicknovel.EPUB_CURRENT_POSITION_SCROLL_CHAR
+import com.lagradost.quicknovel.ErrorLoadingException
 import com.lagradost.quicknovel.HISTORY_FOLDER
 import com.lagradost.quicknovel.LoadResponse
 import com.lagradost.quicknovel.PreferenceDelegate
@@ -42,13 +43,13 @@ import com.lagradost.quicknovel.UserReview
 import com.lagradost.quicknovel.mvvm.Resource
 import com.lagradost.quicknovel.mvvm.launchSafe
 import com.lagradost.quicknovel.ui.ReadType
+import com.lagradost.quicknovel.ui.common.ImmutableSearchResponse
 import com.lagradost.quicknovel.ui.download.CHAPTER_SORT
 import com.lagradost.quicknovel.ui.download.DownloadFragment
 import com.lagradost.quicknovel.ui.download.LAST_ACCES_SORT
 import com.lagradost.quicknovel.ui.download.LAST_UPDATED_SORT
 import com.lagradost.quicknovel.ui.download.REVERSE_CHAPTER_SORT
 import com.lagradost.quicknovel.ui.download.REVERSE_LAST_ACCES_SORT
-import com.lagradost.quicknovel.ui.download.REVERSE_LAST_UPDATED_SORT
 import com.lagradost.quicknovel.ui.download.SortingMethod
 import com.lagradost.quicknovel.util.Apis
 import com.lagradost.quicknovel.util.Coroutines.ioSafe
@@ -239,7 +240,7 @@ class ResultViewModel : ViewModel() {
                 if (loadPage == 1) {
                     reviews.postValue(Resource.Loading())
                 }
-                when (val data = api.loadReviews(url, loadPage, false)) {
+                when (val data = api.loadReviews(url, loadPage, load.reviewData)) {
                     is Resource.Success -> {
                         val moreReviews = data.value
                         currentReviews.addAll(moreReviews)
@@ -489,7 +490,8 @@ class ResultViewModel : ViewModel() {
                     load.rating,
                     (load as? StreamResponse)?.data?.size ?: 1,
                     System.currentTimeMillis(),
-                    synopsis = load.synopsis
+                    synopsis = load.synopsis,
+                    posterHeaders = load.posterHeaders
                 )
             )
         }
@@ -550,7 +552,8 @@ class ResultViewModel : ViewModel() {
                 load.rating,
                 totalChapters,
                 System.currentTimeMillis(),
-                synopsis = load.synopsis
+                synopsis = load.synopsis,
+                posterHeaders = load.posterHeaders
             )
         )
     }
@@ -562,6 +565,7 @@ class ResultViewModel : ViewModel() {
                 RESULT_BOOKMARK_STATE, loadId.toString(), state
             )
             updateBookmarkData()
+            BookDownloader2.bookmarkChanged(loadId)
         }
 
         readState.postValue(ReadType.fromSpinner(state))
@@ -594,7 +598,6 @@ class ResultViewModel : ViewModel() {
     }
 
     override fun onCleared() {
-        super.onCleared()
         BookDownloader2.downloadProgressChanged -= ::progressChanged
         //BookDownloader2.downloadDataChanged -= ::progressDataChanged
         BookDownloader2.downloadRemoved -= ::downloadRemoved
@@ -717,7 +720,7 @@ class ResultViewModel : ViewModel() {
         )
         reCacheChapters()
         updateBookmarkData()
-
+        BookDownloader2.openChanged(tid)
         hasLoaded = true
 
         // insert a download progress if not found
@@ -747,6 +750,33 @@ class ResultViewModel : ViewModel() {
             load = data
             loadResponse.postValue(Resource.Success(data))
             setState(card.id)
+        }
+    }
+    fun initState(card: ImmutableSearchResponse) = viewModelScope.launch {
+        val id = card.id ?: throw ErrorLoadingException("Require Id")
+        isGetLoaded = false
+        loadResponse.postValue(Resource.Loading(card.url))
+
+        loadMutex.withLock {
+            this@ResultViewModel.apiName = card.apiName
+            repo = Apis.getApiFromName(card.apiName)
+            loadUrl = card.url
+
+            val data = StreamResponse(
+                url = card.url,
+                name = card.name,
+                data = listOf(),
+                author = card.author,
+                posterUrl = card.posterUrl,
+                posterHeaders = card.posterHeaders,
+                rating = card.rating,
+                synopsis = card.synopsis,
+                tags = card.tags,
+                apiName = card.apiName
+            )
+            load = data
+            loadResponse.postValue(Resource.Success(data))
+            setState(id)
         }
     }
 

@@ -9,15 +9,16 @@ import com.lagradost.quicknovel.LoadResponse
 import com.lagradost.quicknovel.MainAPI
 import com.lagradost.quicknovel.R
 import com.lagradost.quicknovel.SearchResponse
+import com.lagradost.quicknovel.UserReview
 import com.lagradost.quicknovel.fixUrl
 import com.lagradost.quicknovel.fixUrlNull
 import com.lagradost.quicknovel.newChapterData
+import com.lagradost.quicknovel.newReview
 import com.lagradost.quicknovel.newSearchResponse
 import com.lagradost.quicknovel.newStreamResponse
 import com.lagradost.quicknovel.setStatus
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import com.lagradost.quicknovel.MainActivity.Companion.app
 
 class NovelLightProvider:  MainAPI() {
     override val name = "Novel Light"
@@ -26,7 +27,7 @@ class NovelLightProvider:  MainAPI() {
     override val iconId = R.drawable.icon_novelight
     override val iconBackgroundId = R.color.novelightColor
     override val hasMainPage = true
-
+    override val hasReviews = true
     fun baseHeaders(url:String = "") =
         if(url.isNotEmpty())
             mapOf(
@@ -87,6 +88,8 @@ class NovelLightProvider:  MainAPI() {
         val infoDiv = document.select("div.container > div.flex-content")
         val title = document.selectFirst("header h1")?.text() ?: throw ErrorLoadingException("Title not found")
 
+        val scriptData = document.selectFirst("#comments script")?.data() ?: ""
+
         val chapters = getChapters(document)
         return newStreamResponse(title,fixUrl(url), chapters) {
             this.posterUrl = fixUrlNull(infoDiv.selectFirst("div.poster > img")?.attr("src"))
@@ -103,9 +106,42 @@ class NovelLightProvider:  MainAPI() {
             this.tags = infoDiv.selectFirst("div.block.mini-info > div > div.info")?.select("> a")?.mapNotNull {
                 it.text().trim().takeIf { text ->  !text.isEmpty() }
             }
+            reviewData = Regex("""const OBJECT_BY_COMMENT = (\d+);""").find(scriptData)?.groupValues?.get(1) ?: ""
+            related = getRelated(document)
         }
     }
 
+    private fun getRelated(dc: Document): List<SearchResponse>{
+        return dc.select("section.manga-list > div.swiper-container > div.swiper-wrapper a").mapNotNull { element ->
+            val href = element.attr("href") ?: return@mapNotNull null
+            val title = element.selectFirst("div.title")?.text() ?: return@mapNotNull null
+            newSearchResponse(
+                name = title,
+                url = href
+            ) {
+                posterUrl = fixUrlNull(element.selectFirst("img")?.attr("src"))
+            }
+        }
+    }
+
+    override suspend fun loadReviews(url: String, page: Int, data: String?): List<UserReview> {
+        val id = data ?: return emptyList()
+
+        //https://novelight.net/api/comments/?content_type=18&limit=20&object_id=308&page=1
+        val realUrl = "$mainUrl/api/comments/?content_type=18&limit=20&object_id=$id&page=$page"
+
+        val res = app.get(realUrl).parsedSafe<NovelLightReviewsResponse>()
+        val dataList = res?.results ?: return emptyList()
+
+        return dataList.mapNotNull { item ->
+            val cleanDate = item.timeCreated?.replace("T", " ")
+            newReview(item.content ?: return@mapNotNull null) {
+                username = item.userObject?.username
+                date = cleanDate
+                avatarUrl = fixUrlNull(item.userObject?.avatar)
+            }
+        }
+    }
     override suspend fun loadHtml(url: String): String {
         val jsonResponse = app.get(
             url = ajaxUrl + "/${url.substringAfterLast("/book/chapter/")}",
@@ -139,6 +175,23 @@ class NovelLightProvider:  MainAPI() {
     data class ChapterResponse(
         @JsonProperty("html")
         val html: String,
+    )
+
+    data class NovelLightReviewsResponse(
+        @JsonProperty("results") val results: List<ReviewItem>? = null,
+        @JsonProperty("count") val count: Int? = null
+    )
+
+    data class ReviewItem(
+        @JsonProperty("content") val content: String? = null,
+        @JsonProperty("time_created") val timeCreated: String? = null,
+        @JsonProperty("user_object") val userObject: ReviewUser? = null,
+        @JsonProperty("rating") val rating: Int? = null
+    )
+
+    data class ReviewUser(
+        @JsonProperty("username") val username: String? = null,
+        @JsonProperty("avatar") val avatar: String? = null
     )
 }
 

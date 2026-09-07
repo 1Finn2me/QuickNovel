@@ -4,6 +4,7 @@ import android.content.DialogInterface
 import androidx.annotation.StringRes
 import androidx.annotation.WorkerThread
 import androidx.appcompat.app.AlertDialog
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
@@ -18,7 +19,6 @@ import com.lagradost.quicknovel.BaseApplication.Companion.removeKey
 import com.lagradost.quicknovel.BaseApplication.Companion.setKey
 import com.lagradost.quicknovel.BookDownloader2
 import com.lagradost.quicknovel.BookDownloader2.currentDownloads
-import com.lagradost.quicknovel.BookDownloader2.currentDownloadsMutex
 import com.lagradost.quicknovel.BookDownloader2.downloadDataRefreshed
 import com.lagradost.quicknovel.BookDownloader2.downloadInfoMutex
 import com.lagradost.quicknovel.BookDownloader2.downloadProgress
@@ -87,6 +87,7 @@ const val REVERSE_LAST_UPDATED_SORT = 10
 const val CHAPTER_SORT = 11
 const val REVERSE_CHAPTER_SORT = 12
 
+@Immutable
 data class SortingMethod(@StringRes val name: Int, val id: Int, val inverse: Int = id)
 class DownloadViewModel : ViewModel() {
 
@@ -147,7 +148,9 @@ class DownloadViewModel : ViewModel() {
     }
 
     fun load(card: ResultCached) {
-        loadResult(card.source, card.apiName)
+        if(!card.isImported) {
+            loadResult(card.source, card.apiName)
+        }
     }
 
     fun stream(card: ResultCached) {
@@ -188,17 +191,16 @@ class DownloadViewModel : ViewModel() {
             cardsData.values
         }
 
-        val values = currentDownloadsMutex.withLock {
+        val values =
             allValues.filter { card ->
                 val notImported = !card.isImported && card.apiName != IMPORT_SOURCE_PDF
                 val canDownload =
                     card.downloadedTotal <= 0 || (card.downloadedCount * 100 / card.downloadedTotal) > 90
-                val notDownloading = !currentDownloads.contains(
+                val notDownloading = !currentDownloads.containsKey(
                     card.id
                 )
                 notImported && canDownload && notDownloading
             }
-        }
 
         downloadInfoMutex.withLock {
             for (card in values) {
@@ -210,9 +212,10 @@ class DownloadViewModel : ViewModel() {
             }
         }
 
+        val ctx = context ?: return
         for (card in values) {
             if (card.downloadedTotal <= 0 || (card.downloadedCount * 100 / card.downloadedTotal) > 90) {
-                BookDownloader2.downloadWorkThread(card)
+                BookDownloader2.downloadWorkThread(card, ctx)
             }
         }
     }
@@ -221,8 +224,12 @@ class DownloadViewModel : ViewModel() {
         DownloadFileWorkManager.refreshAll(this@DownloadViewModel, context ?: return)
     }
 
-    fun refreshReadingProgress(){
-        DownloadFileWorkManager.refreshAllReadingProgress(this@DownloadViewModel, context ?: return, currentTab.value ?: 1)
+    fun refreshReadingProgress() {
+        DownloadFileWorkManager.refreshAllReadingProgress(
+            this@DownloadViewModel,
+            context ?: return,
+            currentTab.value ?: 1
+        )
     }
 
     fun showMetadata(card: DownloadFragment.DownloadDataLoaded) {
@@ -238,7 +245,9 @@ class DownloadViewModel : ViewModel() {
     }
 
     fun load(card: DownloadFragment.DownloadDataLoaded) {
-        loadResult(card.source, card.apiName)
+        if(!card.isImported) {
+            loadResult(card.source, card.apiName)
+        }
     }
 
     fun deleteAlert(card: ResultCached) {
@@ -521,7 +530,6 @@ class DownloadViewModel : ViewModel() {
     }
 
     override fun onCleared() {
-        super.onCleared()
         BookDownloader2.downloadProgressChanged -= ::progressChanged
         BookDownloader2.downloadDataChanged -= ::progressDataChanged
         BookDownloader2.downloadDataRefreshed -= ::downloadDataRefreshed
@@ -534,12 +542,12 @@ class DownloadViewModel : ViewModel() {
         extraBufferCapacity = 32
     )
     val refresh = _refresh.asSharedFlow()
-    fun setIsLoading(isActive: Boolean, currentTab: Int){
+    fun setIsLoading(isActive: Boolean, currentTab: Int) {
         isRefreshing.postValue(isActive)
-        synchronized(activeRefreshTabs){
-            if(isActive && !activeRefreshTabs.contains(currentTab))
+        synchronized(activeRefreshTabs) {
+            if (isActive && !activeRefreshTabs.contains(currentTab))
                 activeRefreshTabs.add(currentTab)
-            else{
+            else {
                 _refresh.tryEmit(currentTab)
                 activeRefreshTabs.remove(currentTab)
             }
