@@ -8,7 +8,6 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.FileProvider
-import androidx.core.content.edit
 import androidx.preference.PreferenceManager
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.DeserializationFeature
@@ -23,7 +22,6 @@ import com.lagradost.quicknovel.DownloadState
 import com.lagradost.quicknovel.MainActivity.Companion.app
 import com.lagradost.quicknovel.NotificationHelper
 import com.lagradost.quicknovel.R
-import com.lagradost.quicknovel.StreamResponse
 import com.lagradost.quicknovel.mvvm.logError
 import kotlinx.coroutines.runBlocking
 import java.io.*
@@ -43,15 +41,15 @@ class InAppUpdater {
         data class GithubAsset(
             @JsonProperty("name") val name: String,
             @JsonProperty("size") val size: Int, // Size bytes
-            @JsonProperty("browser_download_url") val browserDownloadUrl: String, // download link
-            @JsonProperty("content_type") val contentType: String, // application/vnd.android.package-archive
+            @JsonProperty("browser_download_url") val browser_download_url: String, // download link
+            @JsonProperty("content_type") val content_type: String, // application/vnd.android.package-archive
         )
 
         data class GithubRelease(
-            @JsonProperty("tag_name") val tagName: String, // Version code
+            @JsonProperty("tag_name") val tag_name: String, // Version code
             @JsonProperty("body") val body: String, // Desc
             @JsonProperty("assets") val assets: List<GithubAsset>,
-            @JsonProperty("target_commitish") val targetCommitish: String, // branch
+            @JsonProperty("target_commitish") val target_commitish: String, // branch
         )
 
         data class Update(
@@ -82,21 +80,39 @@ class InAppUpdater {
 
                 val versionRegex = Regex("""(.*?((\d)\.(\d)\.(\d)).*\.apk)""")
 
+                /*
+                val releases = response.map { it.assets }.flatten()
+                    .filter { it.content_type == "application/vnd.android.package-archive" }
+                val found =
+                    releases.sortedWith(compareBy {
+                        versionRegex.find(it.name)?.groupValues?.get(2)
+                    }).toList().lastOrNull()*/
+//                val found =
+//                    response.sortedWith(compareBy { release ->
+//                        release.assets.filter { it.content_type == "application/vnd.android.package-archive" }
+//                            .getOrNull(0)?.name?.let { it1 ->
+//                                versionRegex.find(
+//                                    it1
+//                                )?.groupValues?.get(2)
+//                            }
+//                    }).toList().lastOrNull()
                 val foundAsset = response.assets.getOrNull(0)
-                val currentVersion = packageManager.getPackageInfo(packageName, 0)
+                val currentVersion = packageName?.let {
+                    packageManager.getPackageInfo(
+                        it,
+                        0
+                    )
+                }
 
                 val foundVersion = foundAsset?.name?.let { versionRegex.find(it) }
                 val shouldUpdate =
-                    if (foundAsset != null && foundAsset.browserDownloadUrl != "" && foundVersion != null) {
-                        val currentV = currentVersion?.versionName ?: ""
-                        val foundV = foundVersion.groupValues[2]
-                        currentV < foundV
-                    } else false
-
+                    if (foundAsset?.browser_download_url != "" && foundVersion != null) currentVersion?.versionName?.compareTo(
+                        foundVersion.groupValues[2]
+                    )!! < 0 else false
                 return if (foundVersion != null) {
                     Update(
                         shouldUpdate,
-                        foundAsset.browserDownloadUrl,
+                        foundAsset.browser_download_url,
                         foundVersion.groupValues[2],
                         response.body
                     )
@@ -127,9 +143,9 @@ class InAppUpdater {
                     logError(t)
                 }
 
-                val downloadUrl = URL(url.replace(" ", "%20"))
+                val _url = URL(url.replace(" ", "%20"))
 
-                val connection: URLConnection = downloadUrl.openConnection()
+                val connection: URLConnection = _url.openConnection()
 
                 var bytesRead = 0L
 
@@ -190,7 +206,7 @@ class InAppUpdater {
 
                         val currentTime = System.currentTimeMillis()
                         val timeElapsed = currentTime - lastUpdateTime
-                        if (timeElapsed > UPDATE_TIME) {
+                        if (timeElapsed > 1000) {
                             val progress = bytesRead
                             val total = clen.toLong()
 
@@ -203,14 +219,9 @@ class InAppUpdater {
                             runBlocking {
                                 NotificationHelper.createNotification(
                                     context = this@downloadUpdate,
-                                    source = url,
+                                    source = null,
                                     id = UPDATE_NOTIFICATION_ID,
-                                    load = StreamResponse(
-                                        url = url,
-                                        name = "QuickNovel Update",
-                                        data = emptyList(),
-                                        apiName = "QuickNovel"
-                                    ),
+                                    name = "QuickNovel Update",
                                     stateProgressState = DownloadProgressState(
                                         state = DownloadState.IsDownloading,
                                         downloaded = progress,
@@ -219,8 +230,9 @@ class InAppUpdater {
                                         lastUpdatedMs = lastUpdateTime,
                                         etaMs = eta
                                     ),
-                                    showNotification = true,
                                     progressInBytes = true,
+                                    isActionable = false,
+                                    isStreamNovel = false,
                                 )
                             }
                             lastUpdateTime = currentTime
@@ -247,22 +259,15 @@ class InAppUpdater {
                         context = this@downloadUpdate,
                         source = url,
                         id = UPDATE_NOTIFICATION_ID,
-                        load = StreamResponse(
-                            url = url,
-                            name = "QuickNovel Update",
-                            data = emptyList(),
-                            apiName = "QuickNovel"
-                        ),
+                        name = "QuickNovel Update",
+                        posterUrl = null,
                         stateProgressState = DownloadProgressState(
                             DownloadState.IsDone,
                             clen.toLong(),
                             clen.toLong(),
                             clen.toLong(),
                             lastUpdateTime,
-                            null
-                        ),
-                        showNotification = true,
-                        progressInBytes = true
+                            null)
                     )
                 }
 
@@ -353,7 +358,7 @@ class InAppUpdater {
 
                             if (checkAutoUpdate) {
                                 setNeutralButton(R.string.dont_show_again) { _, _ ->
-                                    settingsManager.edit { putBoolean(getString(R.string.auto_update_key), false) }
+                                    settingsManager.edit().putBoolean("auto_update", false).apply()
                                 }
                             }
                         }

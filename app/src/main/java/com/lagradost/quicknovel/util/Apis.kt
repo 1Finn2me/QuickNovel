@@ -34,7 +34,6 @@ import com.lagradost.quicknovel.providers.LnMTLProvider
 import com.lagradost.quicknovel.providers.LnoriProvider
 import com.lagradost.quicknovel.providers.LuxonScansProvider
 import com.lagradost.quicknovel.providers.MeioNovelProvider
-import com.lagradost.quicknovel.providers.MoreNovelProvider
 import com.lagradost.quicknovel.providers.MtlNovelProvider
 import com.lagradost.quicknovel.providers.NoBadNovelProvider
 import com.lagradost.quicknovel.providers.NovLoveProvider
@@ -68,7 +67,6 @@ import com.lagradost.quicknovel.providers.ScrollersPubProvider
 import com.lagradost.quicknovel.providers.SkyNovelsProvider
 import com.lagradost.quicknovel.providers.SonicMTLProvider
 import com.lagradost.quicknovel.providers.SyosetuProvider
-import com.lagradost.quicknovel.providers.VynovelProvider
 import com.lagradost.quicknovel.providers.WattpadProvider
 import com.lagradost.quicknovel.providers.WebNovelFanficProvider
 import com.lagradost.quicknovel.providers.WebNovelProvider
@@ -114,7 +112,6 @@ class Apis {
             LuxonScansProvider(),
             MeioNovelProvider(),
             //MNovelFreeProvider(), // same as NovelFullVipProvider
-            MoreNovelProvider(),
             MtlNovelProvider(),
             NoBadNovelProvider(),
             NovelasLigerasProvider(),
@@ -151,7 +148,6 @@ class Apis {
             SkyNovelsProvider(),
             SonicMTLProvider(),
             SyosetuProvider(),
-            VynovelProvider(),
             WattpadProvider(),
             WebNovelProvider(),
             WebNovelFanficProvider(),
